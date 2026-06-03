@@ -1,0 +1,41 @@
+---
+description: ECL backend engineering rules — always active
+globs: ["**/*.py", "**/*.toml", "**/*.ini", "**/*.env*"]
+alwaysApply: true
+---
+
+# ECL Backend Rules
+
+## Workspace
+- NEVER read, write, or reference files in ../ECL-Web/ for modification purposes
+- You MAY read ../ECL-Web/ files to understand frontend contracts
+- ALL code changes happen inside ECL-Server/ only
+
+## Code Quality
+- All Python files must pass ruff check and mypy --strict before being considered done
+- No `# type: ignore` without an inline comment explaining why
+- All async functions must use `async def` — no sync DB calls in async context
+- All DB queries go through SQLAlchemy ORM — no raw SQL strings
+
+## Architecture
+- Service layer (service.py) contains all business logic — routers only handle HTTP
+- Dependencies (dependencies.py) handle auth, DB sessions, permissions — never inline these
+- Pydantic schemas live in schemas.py — never use SQLAlchemy models as API responses
+- Enums live in core/enums.py — never define an enum inline in a router or service
+
+## Git Discipline (CRITICAL)
+- After completing each checkbox in the build phases, run: git add -p (stage hunks individually)
+- Then commit with the exact message format specified in ECL_AUTH_BACKEND_PROMPT.md Section 16
+- Do NOT batch multiple features into one commit
+- Do NOT commit broken/untested code — tests must pass before committing
+
+## Testing
+- Every endpoint must have at least one happy-path test and one test per error case
+- Use real PostgreSQL — never mock the database
+- Tests must pass before the commit for that feature
+
+## Security (Never Compromise)
+- Never log passwords, tokens, or secrets in plaintext
+- Never return stack traces to the client in production
+- Always hash tokens before storing in DB
+- Always run password hash even when user is not found (timing attack prevention)
