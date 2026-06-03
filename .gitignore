@@ -6,6 +6,7 @@ __pycache__/
 .Python
 .venv/
 venv/
+.env
 env/
 *.egg-info/
 dist/
@@ -24,6 +25,7 @@ htmlcov/
 # Keys
 *.pem
 keys/
+.env
 
 # IDE
 .idea/
