@@ -30,6 +30,9 @@ dependencies = [
     "python-ulid>=3.0",
     "pytz>=2024.1",
     "user-agents>=2.2",
+    "starlette-csrf>=1.4.7",
+    "pyotp>=2.9.0",
+    "qrcode[pil]>=8.0",
 ]
 
 [project.optional-dependencies]

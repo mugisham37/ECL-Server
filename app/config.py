@@ -75,6 +75,18 @@ class Settings(BaseSettings):
 
     refresh_cookie_name: str = "ecl_refresh"
 
+    suppress_email_send: bool = False
+
+    trust_proxy_headers: bool = False
+    trusted_proxy_count: int = 1
+
+    csrf_secret: str = "changeme-csrf-secret-32-chars-min"
+
+    totp_issuer_name: str = "ECL Platform"
+    totp_encryption_key: str = ""
+
+    ip_hash_salt: str = "ecl-ip-hash-salt"
+
     @field_validator("cors_origins", mode="before")
     @classmethod
     def parse_cors(cls, v: str | list[str]) -> str:

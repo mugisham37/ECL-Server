@@ -6,6 +6,7 @@ from redis.asyncio import Redis
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.config import get_settings
 from app.core.cache import get_redis_client, is_token_blacklisted
 from app.core.enums import MemberStatus, UserRole
 from app.core.exceptions import ECLException
@@ -29,7 +30,7 @@ async def get_current_user(
         raise ECLException("TOKEN_INVALID", "Authentication required.", 401)
     payload = decode_access_token(creds.credentials)
     jti = payload.get("jti")
-    if jti and await is_token_blacklisted(redis, jti):
+    if jti and await is_token_blacklisted(redis, jti, db):
         raise ECLException("TOKEN_BLACKLISTED", "Token has been revoked.", 401)
     user_id = payload.get("sub")
     if not user_id:
@@ -89,8 +90,11 @@ PlatformAdmin = Annotated[User, Depends(require_platform_admin)]
 
 
 def get_client_ip(x_forwarded_for: str | None = None) -> str:
-    if x_forwarded_for:
-        return x_forwarded_for.split(",")[0].strip()
+    settings = get_settings()
+    if settings.trust_proxy_headers and x_forwarded_for:
+        ips = [ip.strip() for ip in x_forwarded_for.split(",") if ip.strip()]
+        idx = max(0, len(ips) - settings.trusted_proxy_count)
+        return ips[idx] if ips else "127.0.0.1"
     return "127.0.0.1"
 
 

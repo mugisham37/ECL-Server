@@ -44,10 +44,42 @@ def create_app() -> FastAPI:
         allow_origins=settings.cors_origins_list,
         allow_credentials=True,
         allow_methods=["GET", "POST", "PATCH", "DELETE", "OPTIONS"],
-        allow_headers=["Authorization", "Content-Type", "X-Request-ID"],
+        allow_headers=["Authorization", "Content-Type", "X-Request-ID", "X-CSRF-Token"],
         expose_headers=["X-Request-ID", "X-RateLimit-Remaining", "X-RateLimit-Reset"],
         max_age=600,
     )
+
+    try:
+        from starlette_csrf import CSRFMiddleware
+
+        app.add_middleware(
+            CSRFMiddleware,
+            secret=settings.csrf_secret,
+            sensitive_cookies={settings.refresh_cookie_name},
+            cookie_name="csrftoken",
+            cookie_path="/",
+            cookie_secure=settings.is_production,
+            cookie_samesite="lax",
+            header_name="x-csrf-token",
+            exempt_urls=[
+                r"^/health$",
+                r"^/ready$",
+                r"^/\.well-known/",
+                r"^/api/v1/auth/login$",
+                r"^/api/v1/auth/register$",
+                r"^/api/v1/auth/forgot-password$",
+                r"^/api/v1/auth/reset-password$",
+                r"^/api/v1/auth/verify-email/",
+                r"^/api/v1/auth/mfa/verify$",
+                r"^/api/v1/invites/validate/",
+                r"^/api/v1/invites/accept$",
+                r"^/docs",
+                r"^/openapi",
+                r"^/metrics",
+            ],
+        )
+    except ImportError:
+        pass  # starlette-csrf not installed yet; skips gracefully
 
     from app.routers import api_router
 
