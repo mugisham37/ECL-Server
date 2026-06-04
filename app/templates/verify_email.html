@@ -1,0 +1,21 @@
+{% extends "base_email.html" %}
+{% block content %}
+<h2 style="margin-top:0;color:#1a1a2e;font-size:20px;">Verify your email address</h2>
+<p style="color:#444;line-height:1.6;">Hi {{ user_name }},</p>
+<p style="color:#444;line-height:1.6;">
+  Thanks for signing up for ECL Platform. Please verify your email address to get full access to your workspace.
+</p>
+<p style="margin:28px 0;">
+  <a href="{{ verify_url }}"
+     style="background:#6D4AFF;color:#fff;padding:12px 28px;border-radius:6px;text-decoration:none;font-weight:600;display:inline-block;">
+    Verify Email Address
+  </a>
+</p>
+<p style="color:#666;font-size:14px;line-height:1.6;">
+  This link expires in <strong>24 hours</strong>. If you didn't create an account, you can safely ignore this email.
+</p>
+<p style="color:#999;font-size:12px;margin-top:24px;border-top:1px solid #eee;padding-top:16px;">
+  Or copy and paste this URL into your browser:<br>
+  <span style="word-break:break-all;">{{ verify_url }}</span>
+</p>
+{% endblock %}
