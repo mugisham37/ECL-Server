@@ -1,0 +1,18 @@
+{% extends "base_email.html" %}
+{% block content %}
+<h2 style="margin-top:0;color:#1a1a2e;font-size:20px;">Welcome to ECL Platform</h2>
+<p style="color:#444;line-height:1.6;">Hi {{ user_name }},</p>
+<p style="color:#444;line-height:1.6;">
+  Your workspace <strong>{{ tenant_name }}</strong> is ready. You can now start configuring your ECL models,
+  invite your team, and run your first analysis.
+</p>
+<p style="margin:28px 0;">
+  <a href="{{ dashboard_url }}"
+     style="background:#6D4AFF;color:#fff;padding:12px 28px;border-radius:6px;text-decoration:none;font-weight:600;display:inline-block;">
+    Go to Dashboard
+  </a>
+</p>
+<p style="color:#666;font-size:14px;line-height:1.6;">
+  If you have any questions, feel free to reach out to our support team.
+</p>
+{% endblock %}
