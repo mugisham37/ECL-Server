@@ -14,6 +14,7 @@ class TenantOut(BaseModel):
     currency: str
     reporting_cadence: str
     timezone: str
+    close_requested_at: datetime | None = None
 
 
 class TenantResponse(BaseModel):
@@ -34,8 +35,12 @@ class MemberOut(BaseModel):
     initials: str
     role: str
     status: str
-    last_active: datetime | None
+    last_active_at: datetime | None
     is_you: bool
+
+
+class CloseTenantRequest(BaseModel):
+    confirmation: str
 
 
 class MembersListResponse(BaseModel):

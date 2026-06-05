@@ -23,10 +23,37 @@ from app.modules.invites.schemas import (
     BatchInviteItem,
     BatchInviteOut,
     BatchInviteRequest,
+    InviteListItemOut,
     InviteValidateData,
     SendInviteRequest,
 )
 from app.modules.tenants.models import Tenant, TenantMembership
+
+
+async def list_tenant_invites(
+    db: AsyncSession, tenant_id: str, status: str = "pending"
+) -> list[InviteListItemOut]:
+    result = await db.execute(
+        select(Invitation, User)
+        .join(User, User.id == Invitation.invited_by_user_id)
+        .where(
+            Invitation.tenant_id == tenant_id,
+            Invitation.status == status,
+        )
+        .order_by(Invitation.created_at.desc())
+    )
+    return [
+        InviteListItemOut(
+            id=inv.id,
+            email=inv.email,
+            role=inv.role,
+            status=inv.status,
+            created_at=inv.created_at,
+            expires_at=inv.expires_at,
+            invited_by_name=inviter.name,
+        )
+        for inv, inviter in result.all()
+    ]
 
 
 async def validate_invite(db: AsyncSession, raw_token: str) -> InviteValidateData:

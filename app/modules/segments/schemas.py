@@ -11,12 +11,15 @@ class CreateSegmentRequest(BaseModel):
 class UpdateSegmentRequest(BaseModel):
     name: str | None = Field(default=None, min_length=2, max_length=100)
     code: str | None = Field(default=None, max_length=50)
+    is_active: bool | None = None
 
 
 class SegmentOut(BaseModel):
     id: str
     name: str
     code: str | None
+    is_active: bool
+    runs_count: int
     created_at: datetime
 
 

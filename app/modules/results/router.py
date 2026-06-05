@@ -18,9 +18,9 @@ async def get_dashboard_endpoint(
     tenant_id: str,
     db: DbSession,
     user: CurrentUser,
-    _m: TenantMembership = Depends(require_tenant_member),
+    membership: TenantMembership = Depends(require_tenant_member),
 ) -> DashboardResponse:
-    data = await service.get_dashboard(db, tenant_id)
+    data = await service.get_dashboard(db, tenant_id, user=user, membership=membership)
     return DashboardResponse(data=data)
 
 
@@ -29,10 +29,12 @@ async def get_portfolio_endpoint(
     tenant_id: str,
     db: DbSession,
     user: CurrentUser,
-    _m: TenantMembership = Depends(require_tenant_member),
+    membership: TenantMembership = Depends(require_tenant_member),
     run_id: str | None = Query(default=None),
 ) -> PortfolioResponse:
-    data = await service.get_portfolio(db, tenant_id, run_id)
+    data = await service.get_portfolio(
+        db, tenant_id, run_id, user=user, membership=membership
+    )
     return PortfolioResponse(data=data)
 
 
@@ -42,7 +44,7 @@ async def get_segment_endpoint(
     segment_name: str,
     db: DbSession,
     user: CurrentUser,
-    _m: TenantMembership = Depends(require_tenant_member),
+    membership: TenantMembership = Depends(require_tenant_member),
     run_id: str | None = Query(default=None),
     page: int = Query(default=1, ge=1),
     per_page: int = Query(default=50, ge=1, le=200),
@@ -54,6 +56,8 @@ async def get_segment_endpoint(
         run_id=run_id,
         page=page,
         per_page=per_page,
+        user=user,
+        membership=membership,
     )
     return SegmentResponse(data=data)
 
@@ -64,8 +68,10 @@ async def get_loan_endpoint(
     loan_id: str,
     db: DbSession,
     user: CurrentUser,
-    _m: TenantMembership = Depends(require_tenant_member),
+    membership: TenantMembership = Depends(require_tenant_member),
     run_id: str | None = Query(default=None),
 ) -> LoanResponse:
-    data = await service.get_loan(db, tenant_id, loan_id, run_id=run_id)
+    data = await service.get_loan(
+        db, tenant_id, loan_id, run_id=run_id, user=user, membership=membership
+    )
     return LoanResponse(data=data)

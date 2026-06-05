@@ -1,7 +1,7 @@
 from datetime import datetime
 from typing import Any
 
-from sqlalchemy import DateTime, JSON, String, Text, func
+from sqlalchemy import DateTime, Integer, JSON, String, Text, func, text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.database import Base
@@ -22,6 +22,13 @@ class Tenant(Base):
         DateTime(timezone=True), nullable=True
     )
     onboarding_progress: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
+    region: Mapped[str | None] = mapped_column(Text, nullable=True)
+    mrr_cents: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default=text("0")
+    )
+    engine_version_pin: Mapped[str | None] = mapped_column(Text, nullable=True)
+    close_requested_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    close_requested_by: Mapped[str | None] = mapped_column(String(26), nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )

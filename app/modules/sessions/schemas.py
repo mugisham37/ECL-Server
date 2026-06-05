@@ -12,6 +12,9 @@ class UserProfileOut(BaseModel):
     tenant_name: str
     is_email_verified: bool
     initials: str
+    title: str | None = None
+    totp_enabled: bool = False
+    avatar_url: str | None = None
 
 
 class MembershipOut(BaseModel):
@@ -32,6 +35,7 @@ class MeResponse(BaseModel):
 
 class UpdateProfileRequest(BaseModel):
     name: str | None = Field(default=None, min_length=2)
+    title: str | None = Field(default=None, max_length=100)
 
 
 class ChangePasswordRequest(BaseModel):
@@ -41,14 +45,19 @@ class ChangePasswordRequest(BaseModel):
 
 class SessionOut(BaseModel):
     id: str
-    device_type: str
-    device_name: str | None
-    last_active_at: datetime
+    title: str
+    description: str
+    device: str
     current: bool
+    created_at: str
 
 
 class SessionsResponse(BaseModel):
     data: list[SessionOut]
+
+
+class AvatarUploadResponse(BaseModel):
+    data: dict[str, str]
 
 
 class TOTPEnrollResponse(BaseModel):

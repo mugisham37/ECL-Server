@@ -56,3 +56,17 @@ class BatchInviteOut(BaseModel):
 class BatchInviteResponse(BaseModel):
     data: list[BatchInviteOut]
     message: str
+
+
+class InviteListItemOut(BaseModel):
+    id: str
+    email: str
+    role: str
+    status: str
+    created_at: datetime
+    expires_at: datetime
+    invited_by_name: str | None
+
+
+class InviteListResponse(BaseModel):
+    data: list[InviteListItemOut]

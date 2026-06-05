@@ -14,11 +14,13 @@ def _register_routers() -> None:
     from app.modules.runs.router import router as runs_router
     from app.modules.segments.router import router as segments_router
     from app.modules.sessions.router import router as sessions_router
+    from app.modules.settings.router import router as settings_router
     from app.modules.tenants.router import router as tenants_router
 
     api_router.include_router(auth_router, prefix="/api/v1")
     api_router.include_router(invites_router, prefix="/api/v1")
     api_router.include_router(sessions_router, prefix="/api/v1")
+    api_router.include_router(settings_router, prefix="/api/v1")
     api_router.include_router(tenants_router, prefix="/api/v1")
     api_router.include_router(segments_router, prefix="/api/v1")
     api_router.include_router(runs_router, prefix="/api/v1")

@@ -9,9 +9,10 @@ from typing import Any
 from zoneinfo import ZoneInfo
 
 import pandas as pd
-from sqlalchemy import func, or_, select
+from sqlalchemy import and_, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.enums import UserRole
 from app.core.exceptions import ECLException
 from app.core.pagination import PageMeta
 from app.core.run_enums import RunStatus, UploadKind, ValidationStatus
@@ -40,6 +41,49 @@ from app.modules.auth.models import User
 from app.modules.auth.utils import user_initials
 from app.modules.collateral.models import CollateralType
 from app.modules.runs.models import Run, Upload
+from app.modules.tenants.models import TenantMembership
+
+
+def get_run_scope_filter(
+    user: User,
+    tenant_id: str,
+    membership: TenantMembership | None,
+):
+    """Returns a SQLAlchemy WHERE clause fragment that scopes run visibility."""
+    if user.is_platform_admin:
+        return Run.tenant_id == tenant_id
+
+    if membership is None:
+        raise ECLException("NO_MEMBERSHIP", "User has no membership in this tenant.", 403)
+
+    if membership.role == UserRole.ADMINISTRATOR.value:
+        return Run.tenant_id == tenant_id
+
+    return and_(Run.tenant_id == tenant_id, Run.created_by_user_id == user.id)
+
+
+async def assert_run_visible(
+    db: AsyncSession,
+    user: User,
+    tenant_id: str,
+    membership: TenantMembership | None,
+    run_id: str,
+) -> Run:
+    result = await db.execute(
+        select(Run).where(Run.id == run_id, Run.tenant_id == tenant_id, Run.deleted_at.is_(None))
+    )
+    run = result.scalar_one_or_none()
+    if not run:
+        raise ECLException("RUN_NOT_FOUND", "Run not found.", 404)
+
+    if not user.is_platform_admin:
+        if membership is None:
+            raise ECLException("RUN_NOT_FOUND", "Run not found.", 404)
+        if membership.role in (UserRole.ANALYST.value, UserRole.REVIEWER.value):
+            if run.created_by_user_id != user.id:
+                raise ECLException("RUN_NOT_FOUND", "Run not found.", 404)
+
+    return run
 from app.modules.runs.schemas import (
     CreateRunRequest,
     EngineInfoOut,
@@ -713,17 +757,23 @@ async def execute_run(
     return ExecuteRunOut(run_id=run_id, status="queued")
 
 
-async def get_run(db: AsyncSession, tenant_id: str, run_id: str) -> RunDetailOut:
+async def get_run(
+    db: AsyncSession,
+    tenant_id: str,
+    run_id: str,
+    user: User | None = None,
+    membership: TenantMembership | None = None,
+) -> RunDetailOut:
     tenant = await _get_tenant(db, tenant_id)
-    result = await db.execute(
-        select(Run).where(
-            Run.id == run_id,
-            Run.tenant_id == tenant_id,
+    if user is not None:
+        run = await assert_run_visible(db, user, tenant_id, membership, run_id)
+    else:
+        result = await db.execute(
+            select(Run).where(Run.id == run_id, Run.tenant_id == tenant_id)
         )
-    )
-    run = result.scalar_one_or_none()
-    if not run:
-        raise ECLException("RESOURCE_NOT_FOUND", "Run not found.", 404)
+        run = result.scalar_one_or_none()
+        if not run:
+            raise ECLException("RESOURCE_NOT_FOUND", "Run not found.", 404)
 
     user = await _get_user(db, run.created_by_user_id)
     base = await _run_list_item(run, user, tenant)
@@ -775,17 +825,27 @@ async def list_runs(
     db: AsyncSession,
     tenant_id: str,
     *,
+    user: User | None = None,
+    membership: TenantMembership | None = None,
     page: int = 1,
     per_page: int = 50,
     status: str | None = None,
     search: str | None = None,
 ) -> tuple[list[RunListItemOut], PageMeta]:
     tenant = await _get_tenant(db, tenant_id)
-    base = (
-        select(Run, User)
-        .join(User, User.id == Run.created_by_user_id)
-        .where(Run.tenant_id == tenant_id, Run.deleted_at.is_(None))
-    )
+    if user is not None:
+        scope = get_run_scope_filter(user, tenant_id, membership)
+        base = (
+            select(Run, User)
+            .join(User, User.id == Run.created_by_user_id)
+            .where(scope, Run.deleted_at.is_(None))
+        )
+    else:
+        base = (
+            select(Run, User)
+            .join(User, User.id == Run.created_by_user_id)
+            .where(Run.tenant_id == tenant_id, Run.deleted_at.is_(None))
+        )
 
     if status and status != "all":
         status_values: list[str] = []

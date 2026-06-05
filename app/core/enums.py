@@ -23,6 +23,7 @@ class TenantStatus(StrEnum):
     TRIAL = "trial"
     ACTIVE = "active"
     SUSPENDED = "suspended"
+    CLOSING = "closing"
 
 
 class DeviceType(StrEnum):

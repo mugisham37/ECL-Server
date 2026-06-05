@@ -1,0 +1,32 @@
+You are working on ECL-Server, a FastAPI backend for an IFRS 9 Expected Credit Loss (ECL) SaaS platform.
+
+CODEBASE RULES — MANDATORY:
+
+1. NEVER touch the ECL-Web directory. Read it only for type contracts.
+2. Every new module follows the exact pattern in app/modules/segments/ — this is the canonical pattern.
+3. All DB IDs are ULID strings: String(26). Import new_ulid from app/core/utils.
+4. All models use SQLAlchemy 2.0 Mapped[type] + mapped_column() syntax — no old Column() syntax.
+5. Services are async. Use AsyncSession. NEVER call db.commit() in services — only db.flush(). The router/dependency layer commits.
+6. Errors use ECLException from app/core/exceptions. Never raise raw HTTPException.
+7. All responses use the Response(data=...) envelope wrapper. Never return raw dicts.
+8. Soft deletes use deleted_at timestamp. Never hard delete business data.
+9. Every query on tenant-scoped data MUST include tenant_id in the WHERE clause.
+10. git add with specific file paths only. Never git add . or git add -A.
+11. Never git push. Only git add + git commit after each completed task.
+12. Run ruff check app/ and mypy app/ before committing.
+
+TECH STACK:
+- FastAPI 0.100+, SQLAlchemy 2.0+, Alembic, PostgreSQL
+- Celery + Redis (db0=cache, db1=celery)
+- MinIO / S3 via aiobotocore
+- JWT RS256 auth, Argon2 passwords, ULID IDs
+- Pydantic v2 schemas
+
+CANONICAL PATTERN FILES — read these first when building any new module:
+- Models:    app/modules/segments/models.py
+- Service:   app/modules/segments/service.py
+- Router:    app/modules/segments/router.py
+- Schemas:   app/modules/segments/schemas.py
+- Paginator: app/core/pagination.py
+- Errors:    app/core/exceptions.py
+- Deps:      app/dependencies.py

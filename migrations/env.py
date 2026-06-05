@@ -19,6 +19,8 @@ from app.modules.runs.models import Run, Upload  # noqa: F401
 from app.modules.segments.models import Segment  # noqa: F401
 from app.modules.sessions.models import RefreshToken, Session  # noqa: F401
 from app.modules.tenants.models import Tenant, TenantMembership  # noqa: F401
+from app.modules.platform.models import EngineVersion, ImpersonationSession  # noqa: F401
+from app.modules.settings.models import NotificationPreferences  # noqa: F401
 
 config = context.config
 if config.config_file_name is not None:

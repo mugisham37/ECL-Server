@@ -39,7 +39,8 @@ from app.modules.results.schemas import (
     TrendPointOut,
 )
 from app.modules.runs.models import Run
-from app.modules.tenants.models import Tenant
+from app.modules.runs.service import assert_run_visible, get_run_scope_filter
+from app.modules.tenants.models import Tenant, TenantMembership
 
 _STAGE_MAP = {
     "Stage 1": 1,
@@ -89,9 +90,18 @@ async def _get_tenant(db: AsyncSession, tenant_id: str) -> Tenant:
 
 
 async def _latest_completed_run(
-    db: AsyncSession, tenant_id: str, run_id: str | None = None
+    db: AsyncSession,
+    tenant_id: str,
+    run_id: str | None = None,
+    user: User | None = None,
+    membership: TenantMembership | None = None,
 ) -> Run:
     if run_id:
+        if user is not None:
+            run = await assert_run_visible(db, user, tenant_id, membership, run_id)
+            if run.status != RunStatus.COMPLETE.value:
+                raise ECLException("RESOURCE_NOT_FOUND", "Completed run not found.", 404)
+            return run
         result = await db.execute(
             select(Run).where(
                 Run.id == run_id,
@@ -105,13 +115,19 @@ async def _latest_completed_run(
             raise ECLException("RESOURCE_NOT_FOUND", "Completed run not found.", 404)
         return run
 
-    result = await db.execute(
-        select(Run)
-        .where(
+    if user is not None:
+        scope = get_run_scope_filter(user, tenant_id, membership)
+        where_clause = (scope, Run.status == RunStatus.COMPLETE.value, Run.deleted_at.is_(None))
+    else:
+        where_clause = (
             Run.tenant_id == tenant_id,
             Run.status == RunStatus.COMPLETE.value,
             Run.deleted_at.is_(None),
         )
+
+    result = await db.execute(
+        select(Run)
+        .where(*where_clause)
         .order_by(Run.finished_at.desc().nullslast(), Run.created_at.desc())
         .limit(1)
     )
@@ -122,18 +138,32 @@ async def _latest_completed_run(
 
 
 async def _previous_completed_run(
-    db: AsyncSession, tenant_id: str, before: datetime | None
+    db: AsyncSession,
+    tenant_id: str,
+    before: datetime | None,
+    user: User | None = None,
+    membership: TenantMembership | None = None,
 ) -> Run | None:
     if before is None:
         return None
-    result = await db.execute(
-        select(Run)
-        .where(
+    if user is not None:
+        scope = get_run_scope_filter(user, tenant_id, membership)
+        where_clause = (
+            scope,
+            Run.status == RunStatus.COMPLETE.value,
+            Run.deleted_at.is_(None),
+            Run.finished_at < before,
+        )
+    else:
+        where_clause = (
             Run.tenant_id == tenant_id,
             Run.status == RunStatus.COMPLETE.value,
             Run.deleted_at.is_(None),
             Run.finished_at < before,
         )
+    result = await db.execute(
+        select(Run)
+        .where(*where_clause)
         .order_by(Run.finished_at.desc())
         .limit(1)
     )
@@ -407,15 +437,22 @@ async def _pd_matrix(
     return (matrix[0], matrix[1], matrix[2])
 
 
-async def get_dashboard(db: AsyncSession, tenant_id: str) -> DashboardOut:
+async def get_dashboard(
+    db: AsyncSession,
+    tenant_id: str,
+    user: User | None = None,
+    membership: TenantMembership | None = None,
+) -> DashboardOut:
     tenant = await _get_tenant(db, tenant_id)
 
     try:
-        latest = await _latest_completed_run(db, tenant_id)
+        latest = await _latest_completed_run(db, tenant_id, user=user, membership=membership)
     except ECLException:
         return DashboardOut(kpis=[], segments=[], stages=[], trend=[], runs=[])
 
-    previous = await _previous_completed_run(db, tenant_id, latest.finished_at)
+    previous = await _previous_completed_run(
+        db, tenant_id, latest.finished_at, user=user, membership=membership
+    )
     loan_count = await _loan_count(db, latest.id, tenant_id)
     prev_loans = (
         await _loan_count(db, previous.id, tenant_id) if previous else None
@@ -605,11 +642,17 @@ async def get_dashboard(db: AsyncSession, tenant_id: str) -> DashboardOut:
 
 
 async def get_portfolio(
-    db: AsyncSession, tenant_id: str, run_id: str | None = None
+    db: AsyncSession,
+    tenant_id: str,
+    run_id: str | None = None,
+    user: User | None = None,
+    membership: TenantMembership | None = None,
 ) -> PortfolioViewOut:
     tenant = await _get_tenant(db, tenant_id)
-    run = await _latest_completed_run(db, tenant_id, run_id)
-    previous = await _previous_completed_run(db, tenant_id, run.finished_at)
+    run = await _latest_completed_run(db, tenant_id, run_id, user=user, membership=membership)
+    previous = await _previous_completed_run(
+        db, tenant_id, run.finished_at, user=user, membership=membership
+    )
     segments = await _segment_aggregates(
         db, run.id, tenant_id, prior_run_id=previous.id if previous else None
     )
@@ -644,10 +687,14 @@ async def get_segment(
     run_id: str | None = None,
     page: int = 1,
     per_page: int = 50,
+    user: User | None = None,
+    membership: TenantMembership | None = None,
 ) -> SegmentViewOut:
     tenant = await _get_tenant(db, tenant_id)
-    run = await _latest_completed_run(db, tenant_id, run_id)
-    previous = await _previous_completed_run(db, tenant_id, run.finished_at)
+    run = await _latest_completed_run(db, tenant_id, run_id, user=user, membership=membership)
+    previous = await _previous_completed_run(
+        db, tenant_id, run.finished_at, user=user, membership=membership
+    )
     segments = await _segment_aggregates(
         db, run.id, tenant_id, prior_run_id=previous.id if previous else None
     )
@@ -682,9 +729,11 @@ async def get_loan(
     loan_id: str,
     *,
     run_id: str | None = None,
+    user: User | None = None,
+    membership: TenantMembership | None = None,
 ) -> LoanViewOut:
     tenant = await _get_tenant(db, tenant_id)
-    run = await _latest_completed_run(db, tenant_id, run_id)
+    run = await _latest_completed_run(db, tenant_id, run_id, user=user, membership=membership)
 
     agg_result = await db.execute(
         select(

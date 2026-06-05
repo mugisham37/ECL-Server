@@ -47,6 +47,17 @@ async def get_current_user(
 CurrentUser = Annotated[User, Depends(get_current_user)]
 
 
+def _synthetic_admin_membership(user_id: str, tenant_id: str) -> TenantMembership:
+    """Platform admins get administrator-level access to any tenant."""
+    return TenantMembership(
+        id="platform-access",
+        user_id=user_id,
+        tenant_id=tenant_id,
+        role=UserRole.ADMINISTRATOR.value,
+        status=MemberStatus.ACTIVE.value,
+    )
+
+
 async def require_tenant_member(
     tenant_id: str,
     current_user: CurrentUser,
@@ -60,9 +71,13 @@ async def require_tenant_member(
         )
     )
     m = result.scalar_one_or_none()
-    if not m:
-        raise ECLException("NOT_TENANT_MEMBER", "Not a member of this workspace.", 403)
-    return m
+    if m:
+        return m
+
+    if current_user.is_platform_admin:
+        return _synthetic_admin_membership(current_user.id, tenant_id)
+
+    raise ECLException("NOT_TENANT_MEMBER", "Not a member of this workspace.", 403)
 
 
 async def require_tenant_admin(

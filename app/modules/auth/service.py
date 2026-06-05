@@ -117,6 +117,7 @@ def _user_out(user: User, membership: TenantMembership, tenant: Tenant) -> UserO
         tenant_name=tenant.name,
         is_email_verified=user.is_email_verified,
         is_onboarding_complete=tenant.onboarding_completed_at is not None,
+        is_platform_admin=user.is_platform_admin,
     )
 
 
@@ -163,6 +164,7 @@ async def _create_session_tokens(
             "name": user.name,
             "role": membership.role,
             "tenant_id": tenant.id,
+            "is_platform_admin": user.is_platform_admin,
         }
     )
 
@@ -480,6 +482,7 @@ async def refresh_tokens(
             "name": user.name,
             "role": membership.role,
             "tenant_id": tenant.id,
+            "is_platform_admin": user.is_platform_admin,
         }
     )
     _set_refresh_cookie(response, new_raw, new_expires)
@@ -686,6 +689,7 @@ async def switch_tenant(
             "name": user.name,
             "role": membership.role,
             "tenant_id": tenant.id,
+            "is_platform_admin": user.is_platform_admin,
         }
     )
     from app.modules.audit.models import AuditEvent

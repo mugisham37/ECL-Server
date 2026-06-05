@@ -12,6 +12,7 @@ async def log_event(
     event_type: str,
     *,
     user_id: str | None = None,
+    tenant_id: str | None = None,
     status: str = "success",
     error_code: str | None = None,
     ip: str | None = None,
@@ -31,6 +32,7 @@ async def log_event(
         )
         entry = AuditLog(
             id=new_ulid(),
+            tenant_id=tenant_id,
             user_id=user_id,
             event_type=event_type,
             status=status,

@@ -51,6 +51,7 @@ class UserOut(BaseModel):
     tenant_name: str
     is_email_verified: bool
     is_onboarding_complete: bool
+    is_platform_admin: bool = False
 
 
 class TokenData(BaseModel):

@@ -144,9 +144,9 @@ async def get_run_endpoint(
     run_id: str,
     db: DbSession,
     user: CurrentUser,
-    _m: TenantMembership = Depends(require_tenant_member),
+    membership: TenantMembership = Depends(require_tenant_member),
 ) -> RunResponse:
-    data = await service.get_run(db, tenant_id, run_id)
+    data = await service.get_run(db, tenant_id, run_id, user=user, membership=membership)
     return RunResponse(data=data)
 
 
@@ -155,7 +155,7 @@ async def list_runs_endpoint(
     tenant_id: str,
     db: DbSession,
     user: CurrentUser,
-    _m: TenantMembership = Depends(require_tenant_member),
+    membership: TenantMembership = Depends(require_tenant_member),
     page: int = Query(default=1, ge=1),
     per_page: int = Query(default=50, ge=1, le=200),
     status: str | None = Query(default=None),
@@ -164,6 +164,8 @@ async def list_runs_endpoint(
     items, meta = await service.list_runs(
         db,
         tenant_id,
+        user=user,
+        membership=membership,
         page=page,
         per_page=per_page,
         status=status,

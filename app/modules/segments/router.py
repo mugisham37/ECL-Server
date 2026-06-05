@@ -59,7 +59,7 @@ async def update_segment_endpoint(
     user: CurrentUser,
     _a: TenantMembership = Depends(require_tenant_admin),
 ) -> None:
-    await service.update_segment(db, tenant_id, segment_id, body)
+    await service.update_segment(db, tenant_id, segment_id, body, user.id)
 
 
 @router.delete("/{tenant_id}/segments/{segment_id}", status_code=status.HTTP_204_NO_CONTENT)

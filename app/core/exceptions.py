@@ -78,6 +78,62 @@ class SlugTakenError(ECLException):
         )
 
 
+class InvalidConfirmationError(ECLException):
+    def __init__(self, expected: str = "CLOSE") -> None:
+        super().__init__(
+            "INVALID_CONFIRMATION",
+            f'Confirmation text must be exactly "{expected}".',
+            status.HTTP_400_BAD_REQUEST,
+        )
+
+
+class AlreadySuspendedError(ECLException):
+    def __init__(self) -> None:
+        super().__init__(
+            "ALREADY_SUSPENDED",
+            "This tenant is already suspended.",
+            status.HTTP_409_CONFLICT,
+        )
+
+
+class NotSuspendedError(ECLException):
+    def __init__(self) -> None:
+        super().__init__(
+            "NOT_SUSPENDED",
+            "This tenant is not currently suspended.",
+            status.HTTP_409_CONFLICT,
+        )
+
+
+class LastAdminError(ECLException):
+    def __init__(self) -> None:
+        super().__init__(
+            "LAST_ADMIN",
+            "This tenant must have at least one active administrator. "
+            "Assign another administrator before making this change.",
+            status.HTTP_409_CONFLICT,
+        )
+
+
+class FileTooLargeError(ECLException):
+    def __init__(self, max_mb: int = 2) -> None:
+        super().__init__(
+            "FILE_TOO_LARGE",
+            f"The uploaded file exceeds the {max_mb}MB maximum allowed size.",
+            status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+        )
+
+
+class UnsupportedMediaTypeError(ECLException):
+    def __init__(self, allowed: list[str]) -> None:
+        allowed_str = ", ".join(allowed)
+        super().__init__(
+            "UNSUPPORTED_MEDIA_TYPE",
+            f"File type not accepted. Allowed types: {allowed_str}.",
+            status.HTTP_415_UNSUPPORTED_MEDIA_TYPE,
+        )
+
+
 class RateLimitedError(ECLException):
     def __init__(self, retry_after: int) -> None:
         super().__init__(

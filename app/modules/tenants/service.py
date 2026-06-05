@@ -3,11 +3,19 @@ from datetime import UTC, datetime
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.enums import MemberStatus, UserRole
-from app.core.exceptions import ECLException
-from app.core.pagination import Page, PageParams, paginate
+from app.core.enums import MemberStatus, TenantStatus, UserRole
+from app.core.exceptions import (
+    AlreadySuspendedError,
+    ECLException,
+    InvalidConfirmationError,
+    LastAdminError,
+)
+from app.core.pagination import Page, PageMeta, PageParams
 from app.modules.auth.models import User
 from app.modules.auth.utils import user_initials
+from app.modules.audit.models import AuditEvent
+from app.modules.audit.service import log_event
+from app.modules.sessions.models import Session
 from app.modules.tenants.models import Tenant, TenantMembership
 from app.modules.tenants.schemas import MemberOut, TenantOut, UpdateMemberRequest, UpdateTenantRequest
 
@@ -28,6 +36,7 @@ async def get_tenant(db: AsyncSession, tenant_id: str) -> TenantOut:
         currency=t.currency,
         reporting_cadence=t.reporting_cadence,
         timezone=t.timezone,
+        close_requested_at=t.close_requested_at,
     )
 
 
@@ -46,14 +55,47 @@ async def update_tenant(db: AsyncSession, tenant_id: str, body: UpdateTenantRequ
         t.timezone = body.timezone
 
 
+async def assert_not_last_admin(db: AsyncSession, tenant_id: str, user_id: str) -> None:
+    """Raises LastAdminError if removing/demoting this user would leave zero active administrators."""
+    result = await db.execute(
+        select(TenantMembership).where(
+            TenantMembership.tenant_id == tenant_id,
+            TenantMembership.user_id == user_id,
+        )
+    )
+    m = result.scalar_one_or_none()
+    if not m or m.role != UserRole.ADMINISTRATOR.value:
+        return
+
+    admins = await db.execute(
+        select(func.count())
+        .select_from(TenantMembership)
+        .where(
+            TenantMembership.tenant_id == tenant_id,
+            TenantMembership.role == UserRole.ADMINISTRATOR.value,
+            TenantMembership.status == MemberStatus.ACTIVE.value,
+            TenantMembership.user_id != user_id,
+        )
+    )
+    if admins.scalar_one() == 0:
+        raise LastAdminError()
+
+
 async def list_members(
     db: AsyncSession,
     tenant_id: str,
     params: PageParams,
     current_user_id: str,
 ) -> Page[MemberOut]:
+    last_active_subq = (
+        select(func.max(Session.last_active_at))
+        .where(Session.user_id == TenantMembership.user_id)
+        .correlate(TenantMembership)
+        .scalar_subquery()
+    )
+
     base = (
-        select(TenantMembership, User)
+        select(TenantMembership, User, last_active_subq.label("last_active_at"))
         .join(User, User.id == TenantMembership.user_id)
         .where(
             TenantMembership.tenant_id == tenant_id,
@@ -78,14 +120,12 @@ async def list_members(
             initials=user_initials(u.name),
             role=m.role,
             status=m.status,
-            last_active=u.last_login_at,
+            last_active_at=last_active,
             is_you=u.id == current_user_id,
         )
-        for m, u in rows
+        for m, u, last_active in rows
     ]
     pages = max(1, (total + params.per_page - 1) // params.per_page)
-    from app.core.pagination import PageMeta
-
     return Page(
         data=data,
         meta=PageMeta(
@@ -119,23 +159,17 @@ async def update_member(
     if not m:
         raise ECLException("RESOURCE_NOT_FOUND", "Member not found.", 404)
 
-    if body.role == UserRole.ADMINISTRATOR.value or m.role == UserRole.ADMINISTRATOR.value:
-        admins = await db.execute(
-            select(func.count())
-            .select_from(TenantMembership)
-            .where(
-                TenantMembership.tenant_id == tenant_id,
-                TenantMembership.role == UserRole.ADMINISTRATOR.value,
-                TenantMembership.status == MemberStatus.ACTIVE.value,
-            )
-        )
-        admin_count = admins.scalar_one()
-        if m.role == UserRole.ADMINISTRATOR.value and admin_count <= 1 and body.role != UserRole.ADMINISTRATOR.value:
-            raise ECLException(
-                "VALIDATION_ERROR",
-                "Cannot demote the last administrator.",
-                400,
-            )
+    demoting_admin = (
+        m.role == UserRole.ADMINISTRATOR.value
+        and body.role is not None
+        and body.role != UserRole.ADMINISTRATOR.value
+    )
+    disabling_admin = (
+        m.role == UserRole.ADMINISTRATOR.value
+        and body.status == MemberStatus.DISABLED.value
+    )
+    if demoting_admin or disabling_admin:
+        await assert_not_last_admin(db, tenant_id, user_id)
 
     if body.role:
         m.role = body.role
@@ -161,19 +195,45 @@ async def remove_member(
     if not m:
         raise ECLException("RESOURCE_NOT_FOUND", "Member not found.", 404)
     if m.role == UserRole.ADMINISTRATOR.value:
-        admins = await db.execute(
-            select(func.count())
-            .select_from(TenantMembership)
-            .where(
-                TenantMembership.tenant_id == tenant_id,
-                TenantMembership.role == UserRole.ADMINISTRATOR.value,
-                TenantMembership.status == MemberStatus.ACTIVE.value,
-            )
-        )
-        if admins.scalar_one() <= 1:
-            raise ECLException(
-                "VALIDATION_ERROR",
-                "Cannot remove the last administrator.",
-                400,
-            )
+        await assert_not_last_admin(db, tenant_id, user_id)
     await db.delete(m)
+
+
+async def close_tenant(
+    db: AsyncSession,
+    tenant_id: str,
+    user_id: str,
+    confirmation: str,
+) -> None:
+    result = await db.execute(
+        select(Tenant).where(Tenant.id == tenant_id, Tenant.deleted_at.is_(None))
+    )
+    tenant = result.scalar_one_or_none()
+    if not tenant:
+        raise ECLException("RESOURCE_NOT_FOUND", "Tenant not found.", 404)
+
+    if confirmation.strip() != "CLOSE":
+        raise InvalidConfirmationError(expected="CLOSE")
+
+    if tenant.status == TenantStatus.CLOSING.value:
+        raise AlreadySuspendedError()
+
+    tenant.close_requested_at = datetime.now(UTC)
+    tenant.close_requested_by = user_id
+    tenant.status = TenantStatus.CLOSING.value
+    await db.flush()
+
+    await log_event(
+        db,
+        AuditEvent.TENANT_CLOSE_REQUESTED,
+        user_id=user_id,
+        tenant_id=tenant_id,
+        details={"requested_by_user_id": user_id, "tenant_id": tenant_id},
+    )
+    await log_event(
+        db,
+        AuditEvent.TENANT_CLOSE_REQUESTED,
+        user_id=user_id,
+        tenant_id=None,
+        details={"requested_by_user_id": user_id, "tenant_id": tenant_id},
+    )

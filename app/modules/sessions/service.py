@@ -1,10 +1,14 @@
+import io
+from datetime import UTC, datetime
+
 from redis.asyncio import Redis
 from sqlalchemy import delete, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.hibp import validate_password_full
-from app.core.security import hash_password, verify_password
+from app.core.security import hash_password, hash_token, verify_password
 from app.core.exceptions import ECLException
+from app.core.storage import delete_object, presign_download, upload_stream
 from app.modules.auth.models import User
 from app.modules.auth.utils import user_initials
 from app.modules.sessions.models import RefreshToken, Session
@@ -21,6 +25,36 @@ from app.modules.sessions.schemas import (
     UserProfileOut,
 )
 from app.modules.tenants.models import Tenant, TenantMembership
+
+
+def relative_time(dt: datetime) -> str:
+    """Returns human-readable time like '2 hours ago', 'yesterday', '3 days ago'."""
+    now = datetime.now(UTC)
+    delta = now - dt
+    seconds = int(delta.total_seconds())
+    if seconds < 60:
+        return "just now"
+    if seconds < 3600:
+        m = seconds // 60
+        return f"{m} minute{'s' if m > 1 else ''} ago"
+    if seconds < 86400:
+        h = seconds // 3600
+        return f"{h} hour{'s' if h > 1 else ''} ago"
+    if seconds < 172800:
+        return "yesterday"
+    d = seconds // 86400
+    return f"{d} days ago"
+
+
+def _device_label(device_type: str | None) -> str:
+    mapping = {"laptop": "desktop", "phone": "phone", "tablet": "tablet"}
+    return mapping.get(device_type or "", "desktop")
+
+
+async def _avatar_url(user: User) -> str | None:
+    if not user.avatar_storage_path:
+        return None
+    return await presign_download(user.avatar_storage_path, expires_seconds=3600)
 
 
 async def get_me(db: AsyncSession, user: User, tenant_id: str | None) -> MeData:
@@ -62,6 +96,9 @@ async def get_me(db: AsyncSession, user: User, tenant_id: str | None) -> MeData:
             tenant_name=active_tenant_name,
             is_email_verified=user.is_email_verified,
             initials=user_initials(user.name),
+            title=user.title,
+            totp_enabled=user.totp_enabled,
+            avatar_url=await _avatar_url(user),
         ),
         memberships=memberships,
     )
@@ -70,6 +107,72 @@ async def get_me(db: AsyncSession, user: User, tenant_id: str | None) -> MeData:
 async def update_profile(db: AsyncSession, user: User, body: UpdateProfileRequest) -> None:
     if body.name:
         user.name = body.name.strip()
+    if body.title is not None:
+        user.title = body.title.strip() or None
+
+
+async def upload_avatar(
+    db: AsyncSession, user: User, content: bytes, content_type: str
+) -> str:
+    from app.core.exceptions import FileTooLargeError, UnsupportedMediaTypeError
+
+    allowed = ["image/png", "image/jpeg"]
+    if content_type not in allowed:
+        raise UnsupportedMediaTypeError(allowed)
+    if len(content) > 2 * 1024 * 1024:
+        raise FileTooLargeError(max_mb=2)
+
+    ext = ".png" if content_type == "image/png" else ".jpg"
+    storage_path = f"users/{user.id}/avatar{ext}"
+
+    if user.avatar_storage_path and user.avatar_storage_path != storage_path:
+        try:
+            await delete_object(user.avatar_storage_path)
+        except Exception:  # noqa: BLE001
+            pass
+
+    file_obj = io.BytesIO(content)
+    await upload_stream(storage_path, file_obj, content_type)
+    user.avatar_storage_path = storage_path
+    await db.flush()
+    return await presign_download(storage_path, expires_seconds=3600)
+
+
+async def delete_avatar(db: AsyncSession, user: User) -> None:
+    if not user.avatar_storage_path:
+        return
+    try:
+        await delete_object(user.avatar_storage_path)
+    except Exception:  # noqa: BLE001
+        pass
+    user.avatar_storage_path = None
+    await db.flush()
+
+
+async def resolve_current_rt_id(db: AsyncSession, raw_refresh: str | None) -> str | None:
+    if not raw_refresh:
+        return None
+    result = await db.execute(
+        select(RefreshToken.id).where(
+            RefreshToken.token_hash == hash_token(raw_refresh),
+            RefreshToken.is_revoked.is_(False),
+        )
+    )
+    return result.scalar_one_or_none()
+
+
+async def resolve_current_session_id(
+    db: AsyncSession, user_id: str, current_rt_id: str | None
+) -> str | None:
+    if not current_rt_id:
+        return None
+    result = await db.execute(
+        select(Session.id).where(
+            Session.user_id == user_id,
+            Session.refresh_token_id == current_rt_id,
+        )
+    )
+    return result.scalar_one_or_none()
 
 
 async def change_password(db: AsyncSession, user: User, body: ChangePasswordRequest) -> None:
@@ -99,16 +202,22 @@ async def list_sessions(db: AsyncSession, user_id: str, current_rt_id: str | Non
     result = await db.execute(
         select(Session).where(Session.user_id == user_id).order_by(Session.last_active_at.desc())
     )
-    return [
-        SessionOut(
-            id=s.id,
-            device_type=s.device_type,
-            device_name=s.device_name,
-            last_active_at=s.last_active_at,
-            current=s.refresh_token_id == current_rt_id if current_rt_id else False,
+    sessions = []
+    for s in result.scalars().all():
+        device_name = s.device_name or "Unknown Device"
+        browser = s.browser or "Unknown Browser"
+        country = s.country or "Unknown location"
+        sessions.append(
+            SessionOut(
+                id=s.id,
+                title=f"{device_name} · {browser}",
+                description=f"{country} · {relative_time(s.last_active_at)}",
+                device=_device_label(s.device_type),
+                current=s.refresh_token_id == current_rt_id if current_rt_id else False,
+                created_at=s.created_at.isoformat(),
+            )
         )
-        for s in result.scalars().all()
-    ]
+    return sessions
 
 
 async def revoke_session(db: AsyncSession, user_id: str, session_id: str, current_session_id: str | None) -> None:

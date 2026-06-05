@@ -40,6 +40,15 @@ class AuditEvent(StrEnum):
     RUN_COMPLETED = "run.completed"
     RUN_FAILED = "run.failed"
     RUN_DELETED = "run.deleted"
+    SEGMENT_UPDATED = "segment.updated"
+    TENANT_CLOSE_REQUESTED = "tenant.close_requested"
+    TENANT_PROVISIONED = "platform.tenant.provisioned"
+    TENANT_SUSPENDED = "platform.tenant.suspended"
+    TENANT_REACTIVATED = "platform.tenant.reactivated"
+    TENANT_TRIAL_EXTENDED = "platform.tenant.trial_extended"
+    IMPERSONATION_STARTED = "platform.impersonation.started"
+    IMPERSONATION_ENDED = "platform.impersonation.ended"
+    ENGINE_PROMOTED = "platform.engine.promoted"
 
 
 class AuditLog(Base):
@@ -50,6 +59,7 @@ class AuditLog(Base):
     )
 
     id: Mapped[str] = mapped_column(String(26), primary_key=True)
+    tenant_id: Mapped[str | None] = mapped_column(String(26), nullable=True, index=True)
     user_id: Mapped[str | None] = mapped_column(String(26), nullable=True, index=True)
     event_type: Mapped[str] = mapped_column(String(50), nullable=False, index=True)
     status: Mapped[str] = mapped_column(String(20), nullable=False, server_default="success")
