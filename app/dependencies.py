@@ -76,6 +76,21 @@ async def require_tenant_admin(
     return m
 
 
+async def require_tenant_analyst_or_admin(
+    tenant_id: str,
+    current_user: CurrentUser,
+    db: DbSession,
+) -> TenantMembership:
+    m = await require_tenant_member(tenant_id, current_user, db)
+    if m.role not in (UserRole.ADMINISTRATOR.value, UserRole.ANALYST.value):
+        raise ECLException(
+            "INSUFFICIENT_ROLE",
+            "Analyst or administrator role required.",
+            403,
+        )
+    return m
+
+
 async def require_platform_admin(current_user: CurrentUser) -> User:
     if not current_user.is_platform_admin:
         raise ECLException(

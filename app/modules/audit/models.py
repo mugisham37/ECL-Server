@@ -32,6 +32,14 @@ class AuditEvent(StrEnum):
     RECOVERY_CODE_USED = "mfa.recovery_code.used"
     ONBOARDING_COMPLETED = "onboarding.completed"
     ONBOARDING_PROGRESS_SAVED = "onboarding.progress_saved"
+    RUN_CREATED = "run.created"
+    FILE_UPLOADED = "run.file_uploaded"
+    VALIDATION_TRIGGERED = "run.validation_triggered"
+    VALIDATION_COMPLETED = "run.validation_completed"
+    RUN_QUEUED = "run.queued"
+    RUN_COMPLETED = "run.completed"
+    RUN_FAILED = "run.failed"
+    RUN_DELETED = "run.deleted"
 
 
 class AuditLog(Base):

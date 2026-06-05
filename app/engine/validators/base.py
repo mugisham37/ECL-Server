@@ -129,10 +129,9 @@ def check_numeric_range(
         return
 
     numeric = pd.to_numeric(df[column], errors="coerce")
-    if allow_missing:
-        invalid_mask = df[column].notna() & numeric.isna()
-    else:
-        invalid_mask = numeric.isna()
+    invalid_mask = (
+        df[column].notna() & numeric.isna() if allow_missing else numeric.isna()
+    )
 
     if min_value is not None:
         invalid_mask |= numeric.notna() & (numeric < min_value)

@@ -52,3 +52,24 @@ def map_run_status_to_api(db_status: str) -> str:
     if db_status in _RUNNING_STATUSES:
         return "running"
     return _STATUS_MAP.get(db_status, db_status)
+
+
+def format_compact_amount(value: float | int) -> str:
+    """Format a currency amount compactly (e.g. 57.4M, 1,284,500)."""
+    n = float(value)
+    abs_n = abs(n)
+    if abs_n >= 1_000_000:
+        return f"{n / 1_000_000:.1f}M"
+    if abs_n >= 1_000:
+        return f"{n:,.0f}"
+    return f"{n:.2f}" if abs_n < 100 else f"{int(n):,}"
+
+
+def format_amount(value: float | int) -> str:
+    """Format a currency amount with thousands separators."""
+    return f"{float(value):,.0f}"
+
+
+def format_percent(value: float, *, decimals: int = 2) -> str:
+    """Format a ratio as a percentage string."""
+    return f"{value * 100:.{decimals}f}%"

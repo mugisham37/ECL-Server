@@ -10,6 +10,8 @@ def _register_routers() -> None:
     from app.modules.invites.router import router as invites_router
     from app.modules.onboarding.router import router as onboarding_router
     from app.modules.platform.router import router as platform_router
+    from app.modules.results.router import router as results_router
+    from app.modules.runs.router import router as runs_router
     from app.modules.segments.router import router as segments_router
     from app.modules.sessions.router import router as sessions_router
     from app.modules.tenants.router import router as tenants_router
@@ -19,6 +21,8 @@ def _register_routers() -> None:
     api_router.include_router(sessions_router, prefix="/api/v1")
     api_router.include_router(tenants_router, prefix="/api/v1")
     api_router.include_router(segments_router, prefix="/api/v1")
+    api_router.include_router(runs_router, prefix="/api/v1")
+    api_router.include_router(results_router, prefix="/api/v1")
     api_router.include_router(collateral_router, prefix="/api/v1")
     api_router.include_router(onboarding_router, prefix="/api/v1")
     api_router.include_router(platform_router, prefix="/api/v1")

@@ -15,14 +15,6 @@ from app.engine.validators.base import (
     check_valid_dates,
 )
 
-PD_REQUIRED_COLUMNS = [
-    "Loan ID",
-    "Reporting Month",
-    "Staging",
-    "Loan Amount",
-    "SEGMENT",
-]
-
 _REPORTING_MONTH_ALIASES = ("Reporting Month", 'Reporting Month ("As At")', "As At")
 
 

@@ -7,31 +7,17 @@ import pandas as pd
 from app.engine.validators.base import (
     STAGING_VALUES,
     ValidationResult,
+    _excel_row,
+    _location,
     check_enum_values,
     check_non_empty_strings,
     check_numeric_range,
     check_required_columns,
     check_uniqueness,
     check_valid_dates,
-    _excel_row,
-    _location,
 )
 
 DEFAULT_REPAYMENT_FREQUENCIES = frozenset({"MTH", "QTR"})
-
-EAD_REQUIRED_COLUMNS = [
-    "Loan ID",
-    "Customer ID",
-    "SEGMENT",
-    "Reporting Date",
-    "Maturity Date",
-    "Adjusted Maturity Date",
-    "First Payment Date",
-    "Staging",
-    "Outstanding Amount",
-    "Effective Interest Rate",
-    "Repayment Frequency",
-]
 
 _STAGING_ALIASES = ("Staging", "Staging (Stage)")
 _EIR_ALIASES = ("Effective Interest Rate", "Effective Interest Rate (EIR)", "EIR")

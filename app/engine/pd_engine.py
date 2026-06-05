@@ -6,7 +6,7 @@ from typing import Any
 
 import numpy as np
 import pandas as pd
-from scipy.linalg import matrix_power
+from numpy.linalg import matrix_power
 
 STAGES = ("Stage 1", "Stage 2", "Stage 3")
 NEXT_STAGES = (*STAGES, "Offbooks")
