@@ -17,6 +17,10 @@ class UpdateRunRequest(BaseModel):
     reporting_period: str | None = Field(default=None, max_length=100)
 
 
+class RerunRequest(BaseModel):
+    name: str | None = Field(default=None, max_length=200)
+
+
 class UploadOut(BaseModel):
     id: str
     kind: str

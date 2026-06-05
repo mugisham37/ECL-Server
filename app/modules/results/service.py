@@ -186,13 +186,18 @@ async def _segment_aggregates(
     tenant_id: str,
     *,
     prior_run_id: str | None = None,
+    stage: str | None = None,
 ) -> list[SegmentDataOut]:
+    base_filter = [EadResult.run_id == run_id, EadResult.tenant_id == tenant_id]
+    if stage:
+        base_filter.append(EadResult.stage == stage)
+
     ecl_sub = (
         select(
             EadResult.segment.label("segment"),
             func.sum(EadResult.discounted_ecl).label("ecl"),
         )
-        .where(EadResult.run_id == run_id, EadResult.tenant_id == tenant_id)
+        .where(*base_filter)
         .group_by(EadResult.segment)
         .subquery()
     )
@@ -203,7 +208,7 @@ async def _segment_aggregates(
             EadResult.loan_id.label("loan_id"),
             func.max(EadResult.bal_after_missed).label("ead_max"),
         )
-        .where(EadResult.run_id == run_id, EadResult.tenant_id == tenant_id)
+        .where(*base_filter)
         .group_by(EadResult.segment, EadResult.loan_id)
         .subquery()
     )
@@ -224,7 +229,7 @@ async def _segment_aggregates(
             EadResult.loan_id.label("loan_id"),
             func.min(EadResult.period_to_discount).label("min_period"),
         )
-        .where(EadResult.run_id == run_id, EadResult.tenant_id == tenant_id)
+        .where(*base_filter)
         .group_by(EadResult.segment, EadResult.loan_id)
         .subquery()
     )
@@ -241,7 +246,7 @@ async def _segment_aggregates(
             & (EadResult.loan_id == stage_sub.c.loan_id)
             & (EadResult.period_to_discount == stage_sub.c.min_period),
         )
-        .where(EadResult.run_id == run_id, EadResult.tenant_id == tenant_id)
+        .where(*base_filter)
         .group_by(EadResult.segment, EadResult.stage)
         .subquery()
     )
@@ -310,7 +315,16 @@ async def _loan_rows_for_segment(
     *,
     page: int = 1,
     per_page: int = 50,
+    stage: str | None = None,
 ) -> tuple[list[LoanRowOut], int]:
+    seg_filter = [
+        EadResult.run_id == run_id,
+        EadResult.tenant_id == tenant_id,
+        EadResult.segment == segment_name,
+    ]
+    if stage:
+        seg_filter.append(EadResult.stage == stage)
+
     ecl_sub = (
         select(
             EadResult.loan_id,
@@ -319,11 +333,7 @@ async def _loan_rows_for_segment(
             func.max(EadResult.bal_after_missed).label("ead"),
             func.avg(EadResult.lgd).label("lgd"),
         )
-        .where(
-            EadResult.run_id == run_id,
-            EadResult.tenant_id == tenant_id,
-            EadResult.segment == segment_name,
-        )
+        .where(*seg_filter)
         .group_by(EadResult.loan_id, EadResult.customer_id)
         .subquery()
     )
@@ -333,11 +343,7 @@ async def _loan_rows_for_segment(
             EadResult.loan_id,
             func.min(EadResult.period_to_discount).label("min_period"),
         )
-        .where(
-            EadResult.run_id == run_id,
-            EadResult.tenant_id == tenant_id,
-            EadResult.segment == segment_name,
-        )
+        .where(*seg_filter)
         .group_by(EadResult.loan_id)
         .subquery()
     )
@@ -349,11 +355,7 @@ async def _loan_rows_for_segment(
             (EadResult.loan_id == stage_sub.c.loan_id)
             & (EadResult.period_to_discount == stage_sub.c.min_period),
         )
-        .where(
-            EadResult.run_id == run_id,
-            EadResult.tenant_id == tenant_id,
-            EadResult.segment == segment_name,
-        )
+        .where(*seg_filter)
         .subquery()
     )
 
@@ -363,9 +365,7 @@ async def _loan_rows_for_segment(
             func.coalesce(func.sum(EadResult.marginal_pd), 0).label("pd_12m"),
         )
         .where(
-            EadResult.run_id == run_id,
-            EadResult.tenant_id == tenant_id,
-            EadResult.segment == segment_name,
+            *seg_filter,
             EadResult.period_to_discount <= 12,
         )
         .group_by(EadResult.loan_id)
@@ -641,20 +641,38 @@ async def get_dashboard(
     )
 
 
+_VALID_STAGES = frozenset({"Stage 1", "Stage 2", "Stage 3"})
+
+
+def _validate_stage(stage: str | None) -> str | None:
+    if stage is None:
+        return None
+    if stage not in _VALID_STAGES:
+        from app.core.exceptions import ECLException
+        raise ECLException(
+            "INVALID_STAGE",
+            f"stage must be one of: {', '.join(sorted(_VALID_STAGES))}.",
+            400,
+        )
+    return stage
+
+
 async def get_portfolio(
     db: AsyncSession,
     tenant_id: str,
     run_id: str | None = None,
     user: User | None = None,
     membership: TenantMembership | None = None,
+    stage: str | None = None,
 ) -> PortfolioViewOut:
+    stage = _validate_stage(stage)
     tenant = await _get_tenant(db, tenant_id)
     run = await _latest_completed_run(db, tenant_id, run_id, user=user, membership=membership)
     previous = await _previous_completed_run(
         db, tenant_id, run.finished_at, user=user, membership=membership
     )
     segments = await _segment_aggregates(
-        db, run.id, tenant_id, prior_run_id=previous.id if previous else None
+        db, run.id, tenant_id, prior_run_id=previous.id if previous else None, stage=stage
     )
     totals = PortfolioTotalsOut(
         ecl=sum(s.ecl for s in segments),
@@ -685,25 +703,27 @@ async def get_segment(
     segment_name: str,
     *,
     run_id: str | None = None,
+    stage: str | None = None,
     page: int = 1,
     per_page: int = 50,
     user: User | None = None,
     membership: TenantMembership | None = None,
 ) -> SegmentViewOut:
+    stage = _validate_stage(stage)
     tenant = await _get_tenant(db, tenant_id)
     run = await _latest_completed_run(db, tenant_id, run_id, user=user, membership=membership)
     previous = await _previous_completed_run(
         db, tenant_id, run.finished_at, user=user, membership=membership
     )
     segments = await _segment_aggregates(
-        db, run.id, tenant_id, prior_run_id=previous.id if previous else None
+        db, run.id, tenant_id, prior_run_id=previous.id if previous else None, stage=stage
     )
     segment = next((s for s in segments if s.name == segment_name), None)
     if not segment:
         raise ECLException("RESOURCE_NOT_FOUND", f"Segment '{segment_name}' not found.", 404)
 
     loans, total = await _loan_rows_for_segment(
-        db, run.id, tenant_id, segment_name, page=page, per_page=per_page
+        db, run.id, tenant_id, segment_name, page=page, per_page=per_page, stage=stage
     )
     pd_matrix = await _pd_matrix(db, run.id, tenant_id, segment_name)
     pages = max(1, (total + per_page - 1) // per_page)

@@ -18,6 +18,7 @@ from app.modules.runs.schemas import (
     CreateRunRequest,
     ExecuteRunResponse,
     PresignedDownloadResponse,
+    RerunRequest,
     RunListResponse,
     RunResponse,
     UpdateRunRequest,
@@ -172,6 +173,28 @@ async def list_runs_endpoint(
         search=search,
     )
     return RunListResponse(data=items, meta=meta.model_dump())
+
+
+@router.post("/{tenant_id}/runs/{run_id}/rerun", status_code=status.HTTP_201_CREATED)
+async def rerun_run_endpoint(
+    tenant_id: str,
+    run_id: str,
+    body: RerunRequest,
+    request: Request,
+    db: DbSession,
+    user: CurrentUser,
+    _a: TenantMembership = Depends(require_tenant_analyst_or_admin),
+) -> RunResponse:
+    data = await service.rerun_run(
+        db,
+        tenant_id,
+        run_id,
+        user.id,
+        body,
+        ip=get_client_ip(request.headers.get("X-Forwarded-For")),
+        user_agent=get_user_agent(request.headers.get("User-Agent")),
+    )
+    return RunResponse(data=data)
 
 
 @router.delete("/{tenant_id}/runs/{run_id}", status_code=status.HTTP_204_NO_CONTENT)

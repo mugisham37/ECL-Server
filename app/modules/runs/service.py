@@ -92,6 +92,7 @@ from app.modules.runs.schemas import (
     ExecuteRunOut,
     FailureDetailsOut,
     KpiOut,
+    RerunRequest,
     RunAuditEventOut,
     RunDetailOut,
     RunListItemOut,
@@ -110,6 +111,7 @@ from app.tasks.compute_tasks import enqueue_compute_pipeline
 
 _AUDIT_DISPLAY: dict[str, tuple[str, str, str]] = {
     AuditEvent.RUN_CREATED.value: ("accent", "Plus", "Run created"),
+    AuditEvent.RUN_RERUN_CREATED.value: ("accent", "RefreshCcw", "Re-run created"),
     AuditEvent.FILE_UPLOADED.value: ("default", "Upload", "Files uploaded"),
     AuditEvent.VALIDATION_TRIGGERED.value: ("default", "FileSearch", "Validation started"),
     AuditEvent.VALIDATION_COMPLETED.value: ("ok", "Check", "Validation passed"),
@@ -926,3 +928,74 @@ async def delete_run(
         user_agent=user_agent,
         details={"run_id": run_id, "description": "Retained for audit"},
     )
+
+
+async def rerun_run(
+    db: AsyncSession,
+    tenant_id: str,
+    run_id: str,
+    user_id: str,
+    req: RerunRequest,
+    *,
+    ip: str | None = None,
+    user_agent: str | None = None,
+) -> RunDetailOut:
+    """Create a new VALIDATED run seeded with the same input files as a completed run."""
+    original = await _get_run(db, tenant_id, run_id)
+    if original.status != RunStatus.COMPLETE.value:
+        raise ECLException(
+            "RUN_NOT_COMPLETED",
+            "Only completed runs can be re-run.",
+            409,
+        )
+
+    tenant = await _get_tenant(db, tenant_id)
+    new_name = req.name.strip() if req.name else f"{original.name} (rerun)"
+
+    new_run = Run(
+        id=new_ulid(),
+        tenant_id=tenant_id,
+        created_by_user_id=user_id,
+        name=new_name,
+        reporting_period=original.reporting_period,
+        combine_pd_files=original.combine_pd_files,
+        status=RunStatus.DRAFT.value,
+        engine_version=ENGINE_VERSION,
+    )
+    db.add(new_run)
+    await db.flush()
+
+    source_uploads = await _load_uploads(db, run_id)
+    for src in source_uploads:
+        copied = Upload(
+            id=new_ulid(),
+            run_id=new_run.id,
+            tenant_id=tenant_id,
+            kind=src.kind,
+            original_filename=src.original_filename,
+            sha256=src.sha256,
+            storage_path=src.storage_path,
+            file_size_bytes=src.file_size_bytes,
+            sheet_count=src.sheet_count,
+            row_count=src.row_count,
+            validation_status=ValidationStatus.OK.value,
+            warnings_accepted=True,
+        )
+        db.add(copied)
+
+    new_run.status = RunStatus.DRAFT.value
+    await db.flush()
+
+    await log_event(
+        db,
+        AuditEvent.RUN_RERUN_CREATED.value,
+        user_id=user_id,
+        ip=ip,
+        user_agent=user_agent,
+        details={
+            "run_id": new_run.id,
+            "source_run_id": run_id,
+            "description": f"Re-run of {short_ulid(run_id)}",
+        },
+    )
+    return await get_run(db, tenant_id, new_run.id)

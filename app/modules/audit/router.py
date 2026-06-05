@@ -36,6 +36,7 @@ def _apply_audit_filters(
 async def audit_log_csv_generator(
     db: AsyncSession,
     *,
+    tenant_id: str | None = None,
     user_id: str | None,
     event_type: str | None,
     start: datetime | None,
@@ -49,6 +50,8 @@ async def audit_log_csv_generator(
     yield header.getvalue()
 
     query = select(AuditLog).order_by(AuditLog.created_at.desc()).limit(50000)
+    if tenant_id:
+        query = query.where(AuditLog.tenant_id == tenant_id)
     query = _apply_audit_filters(
         query, user_id=user_id, event_type=event_type, start=start, end=end
     )

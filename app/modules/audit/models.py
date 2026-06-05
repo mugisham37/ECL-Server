@@ -40,6 +40,7 @@ class AuditEvent(StrEnum):
     RUN_COMPLETED = "run.completed"
     RUN_FAILED = "run.failed"
     RUN_DELETED = "run.deleted"
+    RUN_RERUN_CREATED = "run.rerun_created"
     SEGMENT_UPDATED = "segment.updated"
     TENANT_CLOSE_REQUESTED = "tenant.close_requested"
     TENANT_PROVISIONED = "platform.tenant.provisioned"
