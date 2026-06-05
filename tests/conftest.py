@@ -64,6 +64,8 @@ from app.modules.auth.models import (  # noqa: E402
 )
 from app.modules.collateral.models import CollateralType  # noqa: E402
 from app.modules.invites.models import Invitation  # noqa: E402
+from app.modules.results.models import EadResult, LgdResult, OutputArtifact, PdResult  # noqa: E402
+from app.modules.runs.models import Run, Upload  # noqa: E402
 from app.modules.segments.models import Segment  # noqa: E402
 from app.modules.sessions.models import RefreshToken, Session  # noqa: E402
 from app.modules.tenants.models import Tenant, TenantMembership  # noqa: E402
@@ -77,6 +79,12 @@ TestSessionLocal = async_sessionmaker(test_engine, class_=AsyncSession, expire_o
 
 _CLEAN_ORDER = [
     AuditLog,
+    EadResult,
+    LgdResult,
+    PdResult,
+    OutputArtifact,
+    Upload,
+    Run,
     TokenBlacklist,
     Session,
     RefreshToken,

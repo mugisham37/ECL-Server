@@ -119,5 +119,7 @@ async def test_upload_download_presign_delete(storage_backend: str) -> None:
 
     await delete_object(key)
 
-    with pytest.raises(Exception):
+    from botocore.exceptions import ClientError
+
+    with pytest.raises(ClientError):
         await download_bytes(key)
