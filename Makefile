@@ -45,8 +45,9 @@ format: ## Ruff format
 type-check: ## Mypy strict
 	mypy app/
 
-security-scan: ## Bandit SAST
+security-scan: ## Bandit SAST + pip-audit dependency CVE scan
 	bandit -r app/ -ll
+	pip-audit --desc
 
 generate-keys: ## Generate RSA JWT keys
 	python scripts/generate_keys.py

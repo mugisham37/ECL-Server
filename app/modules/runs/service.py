@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import io
+import zipfile
 from datetime import UTC, datetime
 from typing import Any
 from zoneinfo import ZoneInfo
@@ -249,6 +250,38 @@ async def _allowed_collateral(db: AsyncSession, tenant_id: str) -> set[str]:
         )
     )
     return {row[0] for row in result.all()}
+
+
+_ALLOWED_CONTENT_TYPES = {
+    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    "application/octet-stream",
+    "application/vnd.ms-excel",
+}
+
+
+def _assert_upload_safe(content: bytes, content_type: str) -> None:
+    """Reject non-xlsx uploads and files containing VBA macros."""
+    if content_type not in _ALLOWED_CONTENT_TYPES:
+        raise ECLException(
+            "UNSUPPORTED_MEDIA_TYPE",
+            f"Uploaded file has unsupported content type '{content_type}'. "
+            "Only .xlsx workbooks are accepted.",
+            415,
+        )
+    try:
+        with zipfile.ZipFile(io.BytesIO(content)) as zf:
+            if any("vbaProject" in name for name in zf.namelist()):
+                raise ECLException(
+                    "UNSAFE_FILE",
+                    "Uploaded file contains VBA macros, which are not permitted.",
+                    415,
+                )
+    except zipfile.BadZipFile:
+        raise ECLException(
+            "INVALID_FILE",
+            "Uploaded file is not a valid .xlsx workbook.",
+            415,
+        )
 
 
 def _parse_excel(content: bytes) -> tuple[dict[str, pd.DataFrame], int, int]:
@@ -547,7 +580,16 @@ async def upload_file(
     sha256, size = await upload_stream(storage_path, file_obj, content_type)
 
     content = await download_bytes(storage_path)
+    _assert_upload_safe(content, content_type)
     sheets, sheet_count, row_count = _parse_excel(content)
+
+    if row_count is not None and row_count > 1_000_000:
+        existing_warnings = run.run_warnings or []
+        run.run_warnings = existing_warnings + [
+            f"EC-12: Upload '{kind}' contains {row_count:,} rows. "
+            "Compute time may exceed the 30-minute budget. "
+            "Consider splitting the dataset into batches before running."
+        ]
 
     upload = Upload(
         id=new_ulid(),

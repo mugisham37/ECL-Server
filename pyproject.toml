@@ -53,6 +53,7 @@ dev = [
     "mypy>=1.10",
     "pre-commit>=3.7",
     "bandit>=1.7",
+    "pip-audit>=2.7",
     "types-aiobotocore-s3>=2.13",
 ]
 

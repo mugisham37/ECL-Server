@@ -97,6 +97,8 @@ class Settings(BaseSettings):
     compute_soft_time_limit: int = 1800
     compute_hard_time_limit: int = 2400
 
+    session_idle_timeout_minutes: int = 30
+
     @field_validator("cors_origins", mode="before")
     @classmethod
     def parse_cors(cls, v: str | list[str]) -> str:

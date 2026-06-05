@@ -472,6 +472,13 @@ async def refresh_tokens(
     )
     sess = sess_result.scalar_one_or_none()
     if sess:
+        idle_limit = timedelta(minutes=settings.session_idle_timeout_minutes)
+        if datetime.now(UTC) - sess.last_active_at.replace(tzinfo=UTC) > idle_limit:
+            raise ECLException(
+                "IDLE_SESSION_EXPIRED",
+                "Session expired due to inactivity. Please sign in again.",
+                401,
+            )
         sess.refresh_token_id = new_rt.id
         sess.last_active_at = datetime.now(UTC)
 
