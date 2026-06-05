@@ -9,7 +9,7 @@ celery_app = Celery(
     "ecl_tasks",
     broker=settings.redis_celery_url,
     backend=settings.redis_celery_url,
-    include=["app.tasks.email_tasks", "app.tasks.cleanup_tasks"],
+    include=["app.tasks.email_tasks", "app.tasks.cleanup_tasks", "app.tasks.compute_tasks"],
 )
 
 celery_app.conf.update(
@@ -44,6 +44,20 @@ celery_app.conf.update(
         "purge-expired-token-blacklist": {
             "task": "purge_expired_token_blacklist",
             "schedule": crontab(minute="*/30"),
+        },
+    },
+    task_annotations={
+        "pd_task": {
+            "soft_time_limit": settings.compute_soft_time_limit,
+            "time_limit": settings.compute_hard_time_limit,
+        },
+        "lgd_task": {
+            "soft_time_limit": settings.compute_soft_time_limit,
+            "time_limit": settings.compute_hard_time_limit,
+        },
+        "ead_ecl_task": {
+            "soft_time_limit": settings.compute_soft_time_limit,
+            "time_limit": settings.compute_hard_time_limit,
         },
     },
 )
