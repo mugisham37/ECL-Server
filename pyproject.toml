@@ -82,3 +82,6 @@ ignore_missing_imports = true
 asyncio_mode = "auto"
 asyncio_default_fixture_loop_scope = "session"
 testpaths = ["tests"]
+markers = [
+    "integration: tests requiring MinIO, moto, or other external services",
+]
