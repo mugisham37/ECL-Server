@@ -1,6 +1,7 @@
 from datetime import datetime
+from typing import Any
 
-from sqlalchemy import DateTime, String, Text, func
+from sqlalchemy import DateTime, JSON, String, Text, func
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.database import Base
@@ -17,6 +18,10 @@ class Tenant(Base):
     currency: Mapped[str] = mapped_column(String(8), nullable=False, default="USD")
     reporting_cadence: Mapped[str] = mapped_column(String(16), nullable=False, default="monthly")
     timezone: Mapped[str] = mapped_column(String(64), nullable=False, default="UTC")
+    onboarding_completed_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    onboarding_progress: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )

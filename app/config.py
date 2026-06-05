@@ -87,6 +87,16 @@ class Settings(BaseSettings):
 
     ip_hash_salt: str = "ecl-ip-hash-salt"
 
+    storage_endpoint_url: str = "http://localhost:9000"
+    storage_access_key: str = "minioadmin"
+    storage_secret_key: str = "minioadmin"
+    storage_bucket_name: str = "ecl-platform"
+    storage_region: str = "us-east-1"
+    max_upload_bytes: int = 52_428_800  # 50 MB
+
+    compute_soft_time_limit: int = 1800
+    compute_hard_time_limit: int = 2400
+
     @field_validator("cors_origins", mode="before")
     @classmethod
     def parse_cors(cls, v: str | list[str]) -> str:

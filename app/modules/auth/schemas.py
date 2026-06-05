@@ -50,6 +50,7 @@ class UserOut(BaseModel):
     tenant_id: str
     tenant_name: str
     is_email_verified: bool
+    is_onboarding_complete: bool
 
 
 class TokenData(BaseModel):
@@ -75,6 +76,7 @@ class SwitchTenantData(BaseModel):
     tenant_id: str
     tenant_name: str
     role: str
+    is_onboarding_complete: bool
 
 
 class SwitchTenantResponse(BaseModel):

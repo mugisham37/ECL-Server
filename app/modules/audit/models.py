@@ -30,6 +30,8 @@ class AuditEvent(StrEnum):
     TOTP_VERIFIED = "mfa.totp.verified"
     TOTP_FAILED = "mfa.totp.failed"
     RECOVERY_CODE_USED = "mfa.recovery_code.used"
+    ONBOARDING_COMPLETED = "onboarding.completed"
+    ONBOARDING_PROGRESS_SAVED = "onboarding.progress_saved"
 
 
 class AuditLog(Base):

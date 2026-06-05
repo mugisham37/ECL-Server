@@ -73,6 +73,7 @@ def create_app() -> FastAPI:
                 r"^/api/v1/auth/mfa/verify$",
                 r"^/api/v1/invites/validate/",
                 r"^/api/v1/invites/accept$",
+                r"^/api/v1/onboarding/",
                 r"^/docs",
                 r"^/openapi",
                 r"^/metrics",
