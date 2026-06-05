@@ -258,6 +258,22 @@ def compute_ead(
         how="left",
     )
 
+    # EC-08 — hard fail if an entire segment has no PD data at all.
+    all_segs = set(snapshots["SEGMENT"].astype(str).unique())
+    segs_with_pd = set(
+        snapshots.loc[snapshots["Marginal_PD"].notna(), "SEGMENT"].astype(str).unique()
+    )
+    missing_segs = sorted(all_segs - segs_with_pd)
+    if missing_segs:
+        raise ValueError(
+            f"EC-08: No PD history for segment(s): {', '.join(missing_segs)}. "
+            "All segments present in the EAD file must have corresponding PD data. "
+            "Add these segments to the PD file and re-run."
+        )
+    # For snapshots beyond the PD horizon (months > 299), treat PD/cure as 0.
+    snapshots["Marginal_PD"] = snapshots["Marginal_PD"].fillna(0.0)
+    snapshots["Cure_Rate"] = snapshots["Cure_Rate"].fillna(0.0)
+
     # Steps 9–11 — LGW, LGD, credit loss, discounted ECL.
     bal_after_missed = snapshots["Balance After Missed Payment"].astype(float)
     collateral = snapshots[_LGD_SUM_SHORT].astype(float)
@@ -269,10 +285,10 @@ def compute_ead(
     )
     snapshots["LGW"] = lgw
 
-    cure_rate = snapshots["Cure_Rate"].fillna(0.0).astype(float)
+    cure_rate = snapshots["Cure_Rate"].astype(float)
     snapshots["LGD"] = snapshots["LGW"] * (1.0 - cure_rate)
 
-    marginal_pd = snapshots["Marginal_PD"].fillna(0.0).astype(float)
+    marginal_pd = snapshots["Marginal_PD"].astype(float)
     snapshots["Credit Loss"] = bal_after_missed * marginal_pd * snapshots["LGD"].astype(float)
 
     monthly_rate = snapshots["EIR"].astype(float) / 12.0

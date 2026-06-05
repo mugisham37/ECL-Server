@@ -56,7 +56,7 @@ def get_run_scope_filter(
     if membership is None:
         raise ECLException("NO_MEMBERSHIP", "User has no membership in this tenant.", 403)
 
-    if membership.role == UserRole.ADMINISTRATOR.value:
+    if membership.role in (UserRole.ADMINISTRATOR.value, UserRole.REVIEWER.value):
         return Run.tenant_id == tenant_id
 
     return and_(Run.tenant_id == tenant_id, Run.created_by_user_id == user.id)
@@ -79,7 +79,7 @@ async def assert_run_visible(
     if not user.is_platform_admin:
         if membership is None:
             raise ECLException("RUN_NOT_FOUND", "Run not found.", 404)
-        if membership.role in (UserRole.ANALYST.value, UserRole.REVIEWER.value):
+        if membership.role == UserRole.ANALYST.value:
             if run.created_by_user_id != user.id:
                 raise ECLException("RUN_NOT_FOUND", "Run not found.", 404)
 
