@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from datetime import date
 from decimal import Decimal
-from typing import Any
 
 import numpy as np
 import numpy_financial as npf
@@ -315,11 +314,17 @@ def compute_ead(
     snapshots["Monthly Instalment"] = snapshots["Loan ID"].astype(str).map(instalments)
 
     # Steps 5–7 — balances and discount period via sequential group walk.
+    # Use a synthetic integer key so "Loan ID" is preserved as a regular column
+    # (pandas 3.0 excludes the groupby key column from group DataFrames passed to apply).
+    loan_ids_sorted = sorted(snapshots["Loan ID"].astype(str).unique())
+    loan_id_to_grp = {lid: i for i, lid in enumerate(loan_ids_sorted)}
+    snapshots["_grp"] = snapshots["Loan ID"].astype(str).map(loan_id_to_grp)
     snapshots = (
-        snapshots.groupby("Loan ID", sort=True, group_keys=False)
+        snapshots.groupby("_grp", sort=True, group_keys=False)
         .apply(_walk_loan_balances)
         .reset_index(drop=True)
     )
+    snapshots = snapshots.drop(columns=["_grp"], errors="ignore")
 
     # Step 8 — join PD results.
     pd_lookup = pd_df[
@@ -419,7 +424,9 @@ def compute_ead(
     ]
     # Rename internal PD columns to display names for output.
     if "Marginal_PD" in snapshots.columns and "Marginal PD" not in snapshots.columns:
-        snapshots = snapshots.rename(columns={"Marginal_PD": "Marginal PD", "Cure_Rate": "Cure Rate"})
+        snapshots = snapshots.rename(
+            columns={"Marginal_PD": "Marginal PD", "Cure_Rate": "Cure Rate"}
+        )
 
     output = snapshots[output_cols].sort_values(
         ["Loan ID", "Snapshot Date"],

@@ -5,6 +5,7 @@ from app.config import get_settings
 from app.core.security import decode_access_token
 from app.dependencies import CurrentUser, DbSession, RedisClient
 from app.modules.auth.schemas import MessageResponse
+from app.modules.sessions import service
 from app.modules.sessions.schemas import (
     AvatarUploadResponse,
     ChangePasswordRequest,
@@ -16,7 +17,6 @@ from app.modules.sessions.schemas import (
     TOTPEnrollResponse,
     UpdateProfileRequest,
 )
-from app.modules.sessions import service
 
 router = APIRouter(tags=["me"])
 _bearer = HTTPBearer()
@@ -53,9 +53,9 @@ async def patch_password(
 
 @router.post("/me/avatar")
 async def upload_avatar_endpoint(
-    file: UploadFile = File(...),
     db: DbSession,
     user: CurrentUser,
+    file: UploadFile = File(...),
 ) -> AvatarUploadResponse:
     content = await file.read()
     content_type = file.content_type or ""
@@ -90,7 +90,9 @@ async def delete_session(
 
 
 @router.delete("/me/sessions")
-async def delete_other_sessions(request: Request, db: DbSession, user: CurrentUser) -> MessageResponse:
+async def delete_other_sessions(
+    request: Request, db: DbSession, user: CurrentUser
+) -> MessageResponse:
     raw_refresh = _get_refresh_cookie(request)
     current_rt_id = await service.resolve_current_rt_id(db, raw_refresh)
     current_session_id = await service.resolve_current_session_id(db, user.id, current_rt_id)
