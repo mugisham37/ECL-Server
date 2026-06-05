@@ -12,6 +12,7 @@ import pandas as pd
 
 _STAGING_ALIASES = ("Staging", "Staging (Stage)")
 _EIR_ALIASES = ("Effective Interest Rate", "Effective Interest Rate (EIR)", "EIR")
+_FREQ_ALIASES = ("Repayment Frequency", "Payment Frequency")
 _LGD_SUM_COL = "Sum of Discounted Collaterals per Loan ID"
 _LGD_SUM_SHORT = "Sum of Discounted Collaterals"
 _MISSED_EPS = 1e-9
@@ -34,51 +35,61 @@ def _months_between(start: date | pd.Timestamp, end: date | pd.Timestamp) -> int
     return (end_ts.year - start_ts.year) * 12 + (end_ts.month - start_ts.month)
 
 
-def _monthly_instalment(outstanding: float, eir: float, remaining_term: int) -> float:
-    if remaining_term <= 0:
+def _period_instalment(
+    outstanding: float,
+    eir: float,
+    remaining_months: int,
+    freq: str = "MTH",
+) -> float:
+    """Compute the periodic instalment using numpy_financial PMT.
+
+    For MTH: monthly rate = eir/12, periods = remaining_months.
+    For QTR: quarterly rate = eir/4, periods = remaining_months // 3.
+    Monthly accrual in the balance walk always uses eir/12 regardless of freq.
+    """
+    if freq == "QTR":
+        periods = max(1, remaining_months // 3)
+        period_rate = eir / 4.0
+        if period_rate == 0.0:
+            return outstanding / periods if periods else 0.0
+        return float(-npf.pmt(period_rate, periods, outstanding))
+
+    # Default: MTH
+    if remaining_months <= 0:
         return 0.0
     monthly_rate = eir / 12.0
     if monthly_rate == 0.0:
-        return outstanding / remaining_term
-    return float(-npf.pmt(monthly_rate, remaining_term, outstanding))
-
-
-def _generate_snapshot_dates(
-    reporting_date: pd.Timestamp,
-    maturity_date: pd.Timestamp,
-    staging: str,
-) -> list[pd.Timestamp]:
-    if staging == "Stage 3":
-        return [reporting_date]
-
-    if staging == "Stage 1":
-        offsets = range(13)
-    else:
-        max_months = max(0, _months_between(reporting_date, maturity_date))
-        offsets = range(max_months + 1)
-
-    dates: list[pd.Timestamp] = []
-    for offset in offsets:
-        snapshot = reporting_date + pd.DateOffset(months=offset)
-        if snapshot > maturity_date:
-            break
-        dates.append(snapshot)
-    return dates or [reporting_date]
+        return outstanding / remaining_months
+    return float(-npf.pmt(monthly_rate, remaining_months, outstanding))
 
 
 def _count_missed_periods(
     row_idx: int,
     opening_balances: list[float],
     monthly_rate: float,
-    monthly_instalment: float,
+    instalment: float,
+    freq: str = "MTH",
 ) -> int:
+    """Count missed payment periods among the last 3 payment events.
+
+    For MTH: each row is a payment month — look back 3 rows.
+    For QTR: payments fall on rows where (row_idx+1) % 3 == 0 — look back at
+    the last 3 prior payment rows.
+    """
+    if instalment <= 0:
+        return 0
+
+    if freq == "QTR":
+        payment_rows = [i for i in range(row_idx) if (i + 1) % 3 == 0]
+        lookback = payment_rows[-3:]
+    else:
+        lookback = range(max(0, row_idx - 3), row_idx)
+
     missed = 0
-    for prior_idx in range(max(0, row_idx - 3), row_idx):
+    for prior_idx in lookback:
         opening = opening_balances[prior_idx]
-        if monthly_instalment <= 0:
-            continue
         balance_after_interest = opening * (1.0 + monthly_rate)
-        if balance_after_interest + _MISSED_EPS < monthly_instalment:
+        if balance_after_interest + _MISSED_EPS < instalment:
             missed += 1
     return min(missed, 3)
 
@@ -89,6 +100,7 @@ def _walk_loan_balances(group: pd.DataFrame) -> pd.DataFrame:
     eir = float(group["EIR"].iloc[0])
     monthly_rate = eir / 12.0
     instalment = float(group["Monthly Instalment"].iloc[0])
+    freq = str(group["_freq"].iloc[0]) if "_freq" in group.columns else "MTH"
 
     balances_after_repayment: list[float] = []
     balances_after_missed: list[float] = []
@@ -101,12 +113,19 @@ def _walk_loan_balances(group: pd.DataFrame) -> pd.DataFrame:
             opening = balances_after_repayment[row_idx - 1]
 
         opening_balances.append(opening)
-        after_repayment = opening * (1.0 + monthly_rate) - instalment
+
+        # For QTR loans, apply the instalment only on payment months (every 3rd row).
+        is_payment_month = (freq != "QTR") or ((row_idx + 1) % 3 == 0)
+        effective_instalment = instalment if is_payment_month else 0.0
+
+        after_repayment = opening * (1.0 + monthly_rate) - effective_instalment
         if after_repayment < 0:
             after_repayment = 0.0
         balances_after_repayment.append(after_repayment)
 
-        missed_count = _count_missed_periods(row_idx, opening_balances, monthly_rate, instalment)
+        missed_count = _count_missed_periods(
+            row_idx, opening_balances, monthly_rate, instalment, freq
+        )
         after_missed = after_repayment * ((1.0 + monthly_rate) ** missed_count)
         balances_after_missed.append(after_missed)
 
@@ -114,6 +133,74 @@ def _walk_loan_balances(group: pd.DataFrame) -> pd.DataFrame:
     group["Balance After Missed Payment"] = balances_after_missed
     group["Period to be Discounted"] = range(len(group))
     return group
+
+
+def _expand_snapshots(merged: pd.DataFrame) -> pd.DataFrame:
+    """Vectorised snapshot date expansion — replaces iterrows() loop.
+
+    Stage 3 → 1 snapshot per loan (reporting date).
+    Stage 1 → up to 13 snapshots (offsets 0–12, clipped at maturity).
+    Stage 2 → 1 snapshot per month from reporting date to maturity.
+    Unknown staging → treated as Stage 3 (single snapshot).
+    """
+    rep_dates = pd.to_datetime(merged["Reporting Date"])
+    mat_dates = pd.to_datetime(merged["Maturity Date"])
+    merged = merged.copy()
+    merged["_rep_date"] = rep_dates
+    merged["_mat_date"] = mat_dates
+
+    parts: list[pd.DataFrame] = []
+
+    # Stage 3 — trivial: one snapshot per loan.
+    s3 = merged[merged["Staging"] == "Stage 3"].copy()
+    if not s3.empty:
+        s3["Snapshot Date"] = s3["_rep_date"]
+        parts.append(s3)
+
+    # Stage 1 — fixed 13 offsets, clipped at maturity.
+    s1 = merged[merged["Staging"] == "Stage 1"].reset_index(drop=True)
+    if not s1.empty:
+        s1_frames = [
+            s1.copy().assign(
+                **{"Snapshot Date": s1["_rep_date"] + pd.DateOffset(months=i)}
+            )
+            for i in range(13)
+        ]
+        s1_exp = pd.concat(s1_frames, ignore_index=True)
+        s1_exp["Snapshot Date"] = pd.to_datetime(s1_exp["Snapshot Date"])
+        s1_exp = s1_exp[s1_exp["Snapshot Date"] <= s1_exp["_mat_date"]]
+        parts.append(s1_exp)
+
+    # Stage 2 — variable horizon per loan; use np.repeat for row expansion.
+    s2 = merged[merged["Staging"] == "Stage 2"].reset_index(drop=True)
+    if not s2.empty:
+        s2_rep = s2["_rep_date"]
+        s2_mat = s2["_mat_date"]
+        max_months = [max(0, _months_between(r, m)) for r, m in zip(s2_rep, s2_mat)]
+        lens = [n + 1 for n in max_months]
+        row_idx_arr = np.repeat(np.arange(len(s2)), lens)
+        offset_arr = np.concatenate([np.arange(n) for n in lens])
+        s2_exp = s2.iloc[row_idx_arr].reset_index(drop=True)
+        s2_exp["Snapshot Date"] = [
+            s2_rep.iloc[row_idx_arr[i]] + pd.DateOffset(months=int(offset_arr[i]))
+            for i in range(len(s2_exp))
+        ]
+        s2_exp["Snapshot Date"] = pd.to_datetime(s2_exp["Snapshot Date"])
+        s2_exp = s2_exp[s2_exp["Snapshot Date"] <= s2_exp["_mat_date"]]
+        parts.append(s2_exp)
+
+    # Unknown staging — single snapshot, emit no warning here (validator catches this).
+    other = merged[~merged["Staging"].isin(["Stage 1", "Stage 2", "Stage 3"])].copy()
+    if not other.empty:
+        other["Snapshot Date"] = other["_rep_date"]
+        parts.append(other)
+
+    if not parts:
+        return pd.DataFrame()
+
+    result = pd.concat(parts, ignore_index=True)
+    result = result.drop(columns=["_rep_date", "_mat_date"], errors="ignore")
+    return result
 
 
 def compute_ead(
@@ -132,6 +219,16 @@ def compute_ead(
     eir_col = _resolve_column(working, _EIR_ALIASES, "Effective Interest Rate")
     if eir_col != "Effective Interest Rate":
         working = working.rename(columns={eir_col: "Effective Interest Rate"})
+
+    # Resolve repayment frequency — default MTH if column is absent.
+    freq_col = _resolve_column(working, _FREQ_ALIASES, "")
+    if freq_col:
+        working["_freq"] = working[freq_col].astype(str).str.upper().str.strip()
+    else:
+        working["_freq"] = "MTH"
+    working["_freq"] = working["_freq"].where(
+        working["_freq"].isin({"MTH", "QTR"}), other="MTH"
+    )
 
     working = working.sort_values(["Loan ID"], kind="mergesort").reset_index(drop=True)
 
@@ -160,22 +257,10 @@ def compute_ead(
     else:
         merged["EIR"] = merged["Effective Interest Rate"]
 
-    # Step 2 — generate snapshot rows.
-    snapshot_rows: list[dict[str, Any]] = []
-    for _, loan in merged.iterrows():
-        reporting_date = pd.Timestamp(loan["Reporting Date"])
-        maturity_date = pd.Timestamp(loan["Maturity Date"])
-        snapshot_dates = _generate_snapshot_dates(
-            reporting_date,
-            maturity_date,
-            str(loan["Staging"]),
-        )
-        for snapshot_date in snapshot_dates:
-            row = loan.to_dict()
-            row["Snapshot Date"] = snapshot_date
-            snapshot_rows.append(row)
+    # Step 2 — generate snapshot rows (vectorised per staging group).
+    snapshots = _expand_snapshots(merged)
 
-    if not snapshot_rows:
+    if snapshots.empty:
         empty = pd.DataFrame(
             columns=[
                 "Loan ID",
@@ -198,7 +283,6 @@ def compute_ead(
         )
         return empty, warnings
 
-    snapshots = pd.DataFrame(snapshot_rows)
     snapshots["Reporting Date"] = pd.to_datetime(snapshots["Reporting Date"])
     snapshots["First Payment Date"] = pd.to_datetime(snapshots["First Payment Date"])
     snapshots["Adjusted Maturity Date"] = pd.to_datetime(snapshots["Adjusted Maturity Date"])
@@ -214,17 +298,19 @@ def compute_ead(
         )
     ]
 
-    # Step 4 — monthly instalment (once per loan).
+    # Step 4 — periodic instalment (once per loan, frequency-aware).
     loan_terms = snapshots.drop_duplicates(subset=["Loan ID"], keep="first").copy()
     instalments: dict[str, float] = {}
     for _, loan in loan_terms.iterrows():
         elapsed = _months_between(loan["First Payment Date"], loan["Reporting Date"])
         total_term = _months_between(loan["First Payment Date"], loan["Adjusted Maturity Date"])
         remaining = total_term - elapsed
-        instalments[str(loan["Loan ID"])] = _monthly_instalment(
+        freq = str(loan.get("_freq", "MTH"))
+        instalments[str(loan["Loan ID"])] = _period_instalment(
             float(loan["Outstanding Amount"]),
             float(loan["EIR"]),
             remaining,
+            freq,
         )
     snapshots["Monthly Instalment"] = snapshots["Loan ID"].astype(str).map(instalments)
 
@@ -331,6 +417,10 @@ def compute_ead(
         "Credit Loss",
         "Discounted ECL",
     ]
+    # Rename internal PD columns to display names for output.
+    if "Marginal_PD" in snapshots.columns and "Marginal PD" not in snapshots.columns:
+        snapshots = snapshots.rename(columns={"Marginal_PD": "Marginal PD", "Cure_Rate": "Cure Rate"})
+
     output = snapshots[output_cols].sort_values(
         ["Loan ID", "Snapshot Date"],
         kind="mergesort",
