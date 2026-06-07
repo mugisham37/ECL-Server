@@ -106,3 +106,12 @@ class MFAChallengeResponse(BaseModel):
 class MFAVerifyRequest(BaseModel):
     challenge_token: str
     code: str = Field(min_length=6, max_length=8)
+
+
+class ResendVerificationRequest(BaseModel):
+    email: EmailStr
+
+    @field_validator("email")
+    @classmethod
+    def normalize_email(cls, v: str) -> str:
+        return v.lower().strip()

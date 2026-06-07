@@ -30,7 +30,6 @@ from app.engine.format_utils import (
     format_amount,
     format_compact_amount,
     format_coverage,
-    format_file_size,
     map_run_status_to_api,
     short_ulid,
 )
@@ -315,16 +314,17 @@ def _validation_status_from_issues(
     return ValidationStatus.OK.value
 
 
-def _issues_to_out(issues: list[ValidationIssue]) -> list[ValidationIssueOut]:
+def _issues_to_out(tagged_issues: list[tuple[str, ValidationIssue]]) -> list[ValidationIssueOut]:
     return [
         ValidationIssueOut(
             id=_issue_id(issue),
+            kind=kind,  # type: ignore[arg-type]
             level=issue.level,
             title=issue.title,
             location=issue.location,
             fix=issue.fix,
         )
-        for issue in issues
+        for kind, issue in tagged_issues
     ]
 
 
@@ -621,8 +621,8 @@ async def upload_file(
     return UploadOut(
         id=upload.id,
         kind=kind,
-        original_filename=filename,
-        file_size=format_file_size(size),
+        filename=filename,
+        size_bytes=size,
         sha256=sha256,
         sheet_count=sheet_count,
         row_count=row_count,
@@ -657,7 +657,7 @@ async def validate_files(
     allowed_collateral = await _allowed_collateral(db, tenant_id)
     accepted_ids = set(req.accepted_warning_ids)
 
-    all_issues: list[ValidationIssue] = []
+    all_issues: list[tuple[str, ValidationIssue]] = []
     segment_dfs: list[pd.DataFrame] = []
 
     for upload in uploads:
@@ -700,16 +700,16 @@ async def validate_files(
         upload.validation_status = _validation_status_from_issues(
             issues, warnings_accepted=upload_warnings_accepted
         )
-        all_issues.extend(issues)
+        all_issues.extend((upload.kind, i) for i in issues)
 
     detected = sorted(_extract_segments(segment_dfs))
     overall_status = ValidationStatus.OK.value
-    if any(i.level == "block" for i in all_issues):
-        overall_status = ValidationStatus.ERROR.value
-    elif any(i.level == "warn" for i in all_issues):
+    if any(i.level == "block" for _, i in all_issues):
+        overall_status = "blocking"
+    elif any(i.level == "warn" for _, i in all_issues):
         unaccepted = [
-            i
-            for i in all_issues
+            (k, i)
+            for k, i in all_issues
             if i.level == "warn" and _issue_id(i) not in accepted_ids
         ]
         if unaccepted and not all(u.warnings_accepted for u in uploads):
@@ -729,7 +729,7 @@ async def validate_files(
         },
     )
     return ValidationResultOut(
-        status=overall_status,  # type: ignore[arg-type]
+        status=overall_status,
         issues=_issues_to_out(all_issues),
         detected_segments=detected,
     )

@@ -28,6 +28,9 @@ from app.modules.invites.schemas import (
     SendInviteRequest,
 )
 from app.modules.tenants.models import Tenant, TenantMembership
+from app.core.logging import get_logger
+
+_log = get_logger(__name__)
 
 
 async def list_tenant_invites(
@@ -153,7 +156,10 @@ async def accept_invite(
 
     await log_event(db, AuditEvent.INVITE_ACCEPTED, user_id=user.id,
                     ip=ip, details={"tenant_id": inv.tenant_id})
-    send_welcome_to_tenant_email.delay(user.id, inv.tenant_id)
+    try:
+        send_welcome_to_tenant_email.delay(user.id, inv.tenant_id)
+    except Exception:
+        _log.warning("email_task_dispatch_failed", task="send_welcome_to_tenant_email", user_id=user.id)
     return auth
 
 
@@ -218,7 +224,10 @@ async def send_invite(
 
     await log_event(db, AuditEvent.INVITE_SENT, user_id=inviter.id,
                     details={"email": request.email, "role": request.role})
-    send_invite_email.delay(inv.id, raw)
+    try:
+        send_invite_email.delay(inv.id, raw)
+    except Exception:
+        _log.warning("email_task_dispatch_failed", task="send_invite_email", invitation_id=inv.id)
     return inv
 
 
@@ -292,7 +301,10 @@ async def batch_send_invites(
     from app.tasks.email_tasks import send_invite_email  # noqa: PLC0415
 
     for inv, raw in created:
-        send_invite_email.delay(inv.id, raw)
+        try:
+            send_invite_email.delay(inv.id, raw)
+        except Exception:
+            _log.warning("email_task_dispatch_failed", task="send_invite_email", invitation_id=inv.id)
 
     await log_event(
         db, AuditEvent.INVITE_BATCH_SENT, user_id=inviter.id,

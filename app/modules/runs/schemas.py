@@ -24,8 +24,8 @@ class RerunRequest(BaseModel):
 class UploadOut(BaseModel):
     id: str
     kind: str
-    original_filename: str
-    file_size: str
+    filename: str
+    size_bytes: int
     sha256: str
     sheet_count: int | None = None
     row_count: int | None = None
@@ -33,6 +33,7 @@ class UploadOut(BaseModel):
 
 class ValidationIssueOut(BaseModel):
     id: str
+    kind: Literal["PD", "LGD", "EAD"]
     level: Literal["warn", "block"]
     title: str
     location: str
@@ -40,7 +41,7 @@ class ValidationIssueOut(BaseModel):
 
 
 class ValidationResultOut(BaseModel):
-    status: Literal["ok", "warn", "error"]
+    status: Literal["ok", "warn", "blocking"]
     issues: list[ValidationIssueOut]
     detected_segments: list[str]
 

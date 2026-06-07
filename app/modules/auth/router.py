@@ -13,6 +13,7 @@ from app.modules.auth.schemas import (
     MFAVerifyRequest,
     MessageResponse,
     RegisterRequest,
+    ResendVerificationRequest,
     ResetPasswordRequest,
     SwitchTenantRequest,
     SwitchTenantResponse,
@@ -132,6 +133,17 @@ async def reset_password_endpoint(
 async def verify_email_endpoint(token: str, db: DbSession) -> MessageResponse:
     await service.verify_email(db, token)
     return MessageResponse(message="Email verified successfully.")
+
+
+@router.post("/resend-verification")
+@limiter.limit("2/hour")
+async def resend_verification_endpoint(
+    request: Request,
+    body: ResendVerificationRequest,
+    db: DbSession,
+) -> MessageResponse:
+    await service.resend_verification_email(db, body)
+    return MessageResponse(message="If that email has a pending verification, a new link has been sent.")
 
 
 @router.post("/mfa/verify")

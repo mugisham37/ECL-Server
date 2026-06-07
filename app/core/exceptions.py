@@ -155,7 +155,19 @@ def _error_body(exc: ECLException) -> dict[str, Any]:
     return body
 
 
-async def ecl_exception_handler(_request: Request, exc: ECLException) -> JSONResponse:
+async def ecl_exception_handler(request: Request, exc: ECLException) -> JSONResponse:
+    from app.core.logging import get_logger
+
+    log = get_logger("app.exceptions")
+    level = "error" if exc.status_code >= 500 else "warning"
+    getattr(log, level)(
+        "ecl_exception",
+        code=exc.code,
+        status_code=exc.status_code,
+        path=request.url.path,
+        method=request.method,
+        exc_info=exc if exc.status_code >= 500 else None,
+    )
     headers: dict[str, str] = {}
     if exc.retry_after is not None:
         headers["Retry-After"] = str(exc.retry_after)
@@ -167,9 +179,17 @@ async def ecl_exception_handler(_request: Request, exc: ECLException) -> JSONRes
 
 
 async def validation_exception_handler(
-    _request: Request, exc: RequestValidationError
+    request: Request, exc: RequestValidationError
 ) -> JSONResponse:
+    from app.core.logging import get_logger
+
     errors = exc.errors()
+    get_logger("app.exceptions").debug(
+        "validation_error",
+        path=request.url.path,
+        error_count=len(errors),
+        first_error=errors[0] if errors else None,
+    )
     first = errors[0] if errors else {}
     loc = first.get("loc", ())
     field = str(loc[-1]) if loc else None
@@ -183,7 +203,16 @@ async def validation_exception_handler(
     )
 
 
-async def generic_exception_handler(_request: Request, _exc: Exception) -> JSONResponse:
+async def generic_exception_handler(request: Request, exc: Exception) -> JSONResponse:
+    from app.core.logging import get_logger
+
+    get_logger("app.exceptions").error(
+        "unhandled_exception",
+        path=request.url.path,
+        method=request.method,
+        exc_type=type(exc).__name__,
+        exc_info=exc,
+    )
     return JSONResponse(
         status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
         content={

@@ -51,10 +51,27 @@ def do_run_migrations(connection: Connection) -> None:
 
 
 async def run_async_migrations() -> None:
+    import ssl
+    from urllib.parse import parse_qs, urlencode, urlparse, urlunparse
+
+    # Mirror the same ssl=require → connect_args fix used in app/database.py so
+    # Alembic migrations also reach Neon over TLS.
+    url = config.get_main_option("sqlalchemy.url", "")
+    connect_args: dict = {}
+    parsed = urlparse(url)
+    if "+asyncpg" in parsed.scheme:
+        params = parse_qs(parsed.query, keep_blank_values=True)
+        ssl_val = params.pop("ssl", [None])[0]
+        if ssl_val in ("require", "true"):
+            connect_args["ssl"] = ssl.create_default_context()
+        clean_url = urlunparse(parsed._replace(query=urlencode({k: v[0] for k, v in params.items()})))
+        config.set_main_option("sqlalchemy.url", clean_url)
+
     connectable = async_engine_from_config(
         config.get_section(config.config_ini_section, {}),
         prefix="sqlalchemy.",
         poolclass=pool.NullPool,
+        connect_args=connect_args,
     )
     async with connectable.connect() as connection:
         await connection.run_sync(do_run_migrations)

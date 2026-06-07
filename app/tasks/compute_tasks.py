@@ -5,7 +5,6 @@ from __future__ import annotations
 import asyncio
 import gc
 import io
-import traceback
 from datetime import UTC, datetime
 from decimal import Decimal
 from typing import Any
@@ -15,7 +14,10 @@ import pandas as pd
 from celery import chord, group
 from sqlalchemy import select, text, update
 
+from app.core.logging import get_logger
 from app.tasks.celery_app import celery_app
+
+_log = get_logger(__name__)
 
 STAGE_KEYS = ("pd", "lgd", "ead", "ecl")
 
@@ -318,6 +320,7 @@ def pd_task(self, run_id: str) -> dict[str, str]:  # type: ignore[misc]
         async with AsyncSessionLocal() as db:
             run = await _load_run(db, run_id)
             started_at = await _mark_stage_running(db, run.id, "pd", RunStatus.PD_RUNNING.value)
+            _log.info("compute_stage_started", run_id=run_id, stage="pd")
 
             try:
                 uploads = await _load_uploads(db, run_id, UploadKind.PD.value)
@@ -335,9 +338,16 @@ def pd_task(self, run_id: str) -> dict[str, str]:  # type: ignore[misc]
                 async with engine.begin() as conn:
                     await bulk_insert_pd_results(conn, run.id, run.tenant_id, pd_output)
 
-                await _mark_stage_complete(db, run.id, "pd", started_at)
+                progress = await _mark_stage_complete(db, run.id, "pd", started_at)
+                _log.info(
+                    "compute_stage_completed",
+                    run_id=run_id,
+                    stage="pd",
+                    elapsed_ms=progress.get("pd", {}).get("elapsed_ms"),
+                )
                 return {"run_id": run_id, "stage": "pd"}
             except Exception as exc:
+                _log.error("compute_stage_failed", run_id=run_id, stage="pd", exc_info=exc)
                 await _mark_run_failed(db, run.id, "pd", exc)
                 raise
 
@@ -355,6 +365,7 @@ def lgd_task(self, run_id: str) -> dict[str, str]:  # type: ignore[misc]
         async with AsyncSessionLocal() as db:
             run = await _load_run(db, run_id)
             started_at = await _mark_stage_running(db, run.id, "lgd", RunStatus.LGD_RUNNING.value)
+            _log.info("compute_stage_started", run_id=run_id, stage="lgd")
 
             try:
                 uploads = await _load_uploads(db, run_id, UploadKind.LGD.value)
@@ -370,9 +381,16 @@ def lgd_task(self, run_id: str) -> dict[str, str]:  # type: ignore[misc]
                 async with engine.begin() as conn:
                     await bulk_insert_lgd_results(conn, run.id, run.tenant_id, lgd_output)
 
-                await _mark_stage_complete(db, run.id, "lgd", started_at)
+                progress = await _mark_stage_complete(db, run.id, "lgd", started_at)
+                _log.info(
+                    "compute_stage_completed",
+                    run_id=run_id,
+                    stage="lgd",
+                    elapsed_ms=progress.get("lgd", {}).get("elapsed_ms"),
+                )
                 return {"run_id": run_id, "stage": "lgd"}
             except Exception as exc:
+                _log.error("compute_stage_failed", run_id=run_id, stage="lgd", exc_info=exc)
                 await _mark_run_failed(db, run.id, "lgd", exc)
                 raise
 
@@ -394,6 +412,7 @@ def ead_ecl_task(self, _group_results: list[Any], run_id: str) -> dict[str, str]
         async with AsyncSessionLocal() as db:
             run = await _load_run(db, run_id)
             started_at = await _mark_stage_running(db, run.id, "ead", RunStatus.EAD_RUNNING.value)
+            _log.info("compute_stage_started", run_id=run_id, stage="ead")
 
             ead_df = pd.DataFrame()
             run_warnings: list[str] = []
@@ -491,7 +510,13 @@ def ead_ecl_task(self, _group_results: list[Any], run_id: str) -> dict[str, str]
                 del pd_input, pd_output, lgd_input, lgd_full_df, ead_input, workbooks
                 gc.collect()
 
-                await _mark_stage_complete(db, run.id, "ead", started_at)
+                ead_progress = await _mark_stage_complete(db, run.id, "ead", started_at)
+                _log.info(
+                    "compute_stage_completed",
+                    run_id=run_id,
+                    stage="ead",
+                    elapsed_ms=ead_progress.get("ead", {}).get("elapsed_ms"),
+                )
                 ecl_finished_at = _iso_now()
                 ecl_elapsed_ms = int(
                     (datetime.fromisoformat(ecl_finished_at) - datetime.fromisoformat(ecl_started_at)).total_seconds()
@@ -515,10 +540,11 @@ def ead_ecl_task(self, _group_results: list[Any], run_id: str) -> dict[str, str]
                     run_warnings=run_warnings or None,
                     finished_at=datetime.now(UTC),
                 )
+                _log.info("compute_stage_completed", run_id=run_id, stage="ecl", elapsed_ms=ecl_elapsed_ms)
                 return {"run_id": run_id, "stage": "ead_ecl"}
             except Exception as exc:
+                _log.error("compute_stage_failed", run_id=run_id, stage=active_stage, exc_info=exc)
                 await _mark_run_failed(db, run.id, active_stage, exc)
-                traceback.print_exc()
                 raise
 
     return _run(_compute())

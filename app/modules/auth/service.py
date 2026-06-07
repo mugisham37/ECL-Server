@@ -33,6 +33,7 @@ from app.modules.auth.schemas import (
     MFAChallengeResponse,
     MFAVerifyRequest,
     RegisterRequest,
+    ResendVerificationRequest,
     ResetPasswordRequest,
     SwitchTenantData,
     SwitchTenantRequest,
@@ -40,8 +41,11 @@ from app.modules.auth.schemas import (
     UserOut,
 )
 from app.modules.auth.utils import hash_ip, parse_device, unique_slug, user_initials
+from app.core.logging import get_logger
 from app.modules.sessions.models import RefreshToken, Session
 from app.modules.tenants.models import Tenant, TenantMembership
+
+_log = get_logger(__name__)
 
 
 def _refresh_expiry(remember: bool, settings: Settings) -> datetime:
@@ -184,6 +188,7 @@ async def _create_session_tokens(
 async def check_lockout(user: User) -> None:
     if user.locked_until and user.locked_until > datetime.now(UTC):
         retry = int((user.locked_until - datetime.now(UTC)).total_seconds())
+        _log.warning("account_locked", user_id=user.id, retry_after=max(retry, 1))
         raise AccountLockedError(max(retry, 1))
 
 
@@ -230,7 +235,10 @@ async def register_user(
         email=request.email.lower(),
         name=request.name.strip(),
         hashed_password=hash_password(request.password),
+        is_active=True,
         is_email_verified=False,
+        is_platform_admin=False,
+        failed_login_count=0,
     )
     tenant = Tenant(
         id=new_ulid(),
@@ -267,7 +275,10 @@ async def register_user(
     from app.tasks.email_tasks import send_verification_email
 
     await log_event(db, AuditEvent.USER_REGISTER, user_id=user.id, ip=ip, user_agent=user_agent)
-    send_verification_email.delay(user.id, raw_verify)
+    try:
+        send_verification_email.delay(user.id, raw_verify)
+    except Exception:
+        _log.warning("email_task_dispatch_failed", task="send_verification_email", user_id=user.id)
     return auth_resp
 
 
@@ -293,6 +304,11 @@ async def login_user(
                 db, AuditEvent.LOGIN_FAILED,
                 user_id=user.id, status="failure",
                 error_code="INVALID_CREDENTIALS", ip=ip, user_agent=user_agent,
+            )
+            _log.warning(
+                "login_failed",
+                email_domain=request.email.split("@")[-1],
+                failed_count=user.failed_login_count,
             )
         raise InvalidCredentialsError()
 
@@ -326,6 +342,7 @@ async def login_user(
         response=response,
     )
     await log_event(db, AuditEvent.LOGIN_SUCCESS, user_id=user.id, ip=ip, user_agent=user_agent)
+    _log.info("login_success", user_id=user.id, tenant_id=tenant.id)
     return resp
 
 
@@ -432,6 +449,7 @@ async def refresh_tokens(
         raise ECLException("REFRESH_EXPIRED", "Refresh token invalid or expired.", 401)
 
     if rt.is_revoked:
+        _log.warning("token_reuse_detected", family_id=rt.token_family_id)
         await _revoke_family(db, rt.token_family_id)
         raise ECLException(
             "TOKEN_REUSE",
@@ -607,7 +625,10 @@ async def forgot_password(db: AsyncSession, request: ForgotPasswordRequest, ip: 
         from app.tasks.email_tasks import send_reset_password_email  # noqa: PLC0415
 
         await log_event(db, AuditEvent.PASSWORD_RESET_REQ, user_id=user.id, ip=ip)
-        send_reset_password_email.delay(user.id, raw, ip)
+        try:
+            send_reset_password_email.delay(user.id, raw, ip)
+        except Exception:
+            _log.warning("email_task_dispatch_failed", task="send_reset_password_email", user_id=user.id)
 
 
 async def reset_password(db: AsyncSession, request: ResetPasswordRequest, ip: str = "") -> None:
@@ -647,7 +668,10 @@ async def reset_password(db: AsyncSession, request: ResetPasswordRequest, ip: st
     from app.tasks.email_tasks import send_password_changed_email  # noqa: PLC0415
 
     await log_event(db, AuditEvent.PASSWORD_RESET_DONE, user_id=user.id, ip=ip)
-    send_password_changed_email.delay(user.id, ip)
+    try:
+        send_password_changed_email.delay(user.id, ip)
+    except Exception:
+        _log.warning("email_task_dispatch_failed", task="send_password_changed_email", user_id=user.id)
 
 
 async def verify_email(db: AsyncSession, raw_token: str) -> None:
@@ -673,6 +697,50 @@ async def verify_email(db: AsyncSession, raw_token: str) -> None:
     from app.modules.audit.service import log_event
 
     await log_event(db, AuditEvent.EMAIL_VERIFIED, user_id=user.id)
+
+
+async def resend_verification_email(
+    db: AsyncSession,
+    request: ResendVerificationRequest,
+) -> None:
+    result = await db.execute(
+        select(User).where(
+            User.email == request.email,
+            User.is_active.is_(True),
+            User.deleted_at.is_(None),
+            User.is_email_verified.is_(False),
+        )
+    )
+    user = result.scalar_one_or_none()
+    if not user:
+        return  # silent — do not reveal whether email exists
+
+    # Invalidate any existing unused verification tokens for this user
+    existing = await db.execute(
+        select(EmailVerificationToken).where(
+            EmailVerificationToken.user_id == user.id,
+            EmailVerificationToken.verified_at.is_(None),
+        )
+    )
+    for old_token in existing.scalars().all():
+        old_token.expires_at = datetime.now(UTC)
+
+    raw_verify = generate_raw_token(32)
+    db.add(
+        EmailVerificationToken(
+            id=new_ulid(),
+            user_id=user.id,
+            token_hash=hash_token(raw_verify),
+            expires_at=datetime.now(UTC) + timedelta(hours=24),
+        )
+    )
+
+    from app.tasks.email_tasks import send_verification_email
+
+    try:
+        send_verification_email.delay(user.id, raw_verify)
+    except Exception:
+        _log.warning("email_task_dispatch_failed", task="send_verification_email", user_id=user.id)
 
 
 async def switch_tenant(

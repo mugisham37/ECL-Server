@@ -1,5 +1,16 @@
+import time
+
 from celery import Celery
 from celery.schedules import crontab
+from celery.signals import (
+    setup_logging,
+    task_failure,
+    task_postrun,
+    task_prerun,
+    task_retry,
+    worker_ready,
+    worker_shutdown,
+)
 
 from app.config import get_settings
 
@@ -61,3 +72,85 @@ celery_app.conf.update(
         },
     },
 )
+
+_task_starts: dict[str, float] = {}
+
+
+@setup_logging.connect
+def _configure_celery_logging(**kwargs):  # noqa: ARG001
+    from app.core.logging import configure_logging
+
+    configure_logging(get_settings())
+
+
+@worker_ready.connect
+def _on_worker_ready(**kwargs):  # noqa: ARG001
+    from app.core.logging import get_logger
+
+    get_logger("celery.worker").info("celery_worker_ready")
+
+
+@worker_shutdown.connect
+def _on_worker_shutdown(**kwargs):  # noqa: ARG001
+    from app.core.logging import get_logger
+
+    get_logger("celery.worker").info("celery_worker_shutdown")
+
+
+@task_prerun.connect
+def _on_task_prerun(task_id, task, args, **kwargs):  # noqa: ARG001
+    _task_starts[task_id] = time.perf_counter()
+    from app.core.logging import get_logger
+
+    get_logger("celery.task").info(
+        "task_started",
+        task_name=task.name,
+        task_id=task_id,
+        args_summary=str(args)[:200],
+    )
+
+
+@task_postrun.connect
+def _on_task_postrun(task_id, task, state, **kwargs):  # noqa: ARG001
+    elapsed_ms = round(
+        (time.perf_counter() - _task_starts.pop(task_id, time.perf_counter())) * 1000, 2
+    )
+    from app.core.logging import get_logger
+
+    get_logger("celery.task").info(
+        "task_completed",
+        task_name=task.name,
+        task_id=task_id,
+        state=state,
+        elapsed_ms=elapsed_ms,
+    )
+
+
+@task_failure.connect
+def _on_task_failure(task_id, exception, **kwargs):  # noqa: ARG001
+    elapsed_ms = round(
+        (time.perf_counter() - _task_starts.pop(task_id, time.perf_counter())) * 1000, 2
+    )
+    from app.core.logging import get_logger
+
+    get_logger("celery.task").error(
+        "task_failed",
+        task_id=task_id,
+        exc_type=type(exception).__name__,
+        exc_value=str(exception),
+        elapsed_ms=elapsed_ms,
+        exc_info=exception,
+    )
+
+
+@task_retry.connect
+def _on_task_retry(request, reason, **kwargs):  # noqa: ARG001
+    from app.core.logging import get_logger
+
+    get_logger("celery.task").warning(
+        "task_retry",
+        task_id=request.id,
+        task_name=request.task,
+        reason=str(reason),
+        retries=request.retries,
+    )

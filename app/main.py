@@ -1,4 +1,5 @@
 import base64
+import re
 from contextlib import asynccontextmanager
 from collections.abc import AsyncIterator
 
@@ -17,15 +18,53 @@ from app.database import engine
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
+    from app.core.logging import get_logger
+
+    settings = get_settings()
+    log = get_logger("app.lifecycle")
+
+    db_status: str = "ok"
+    redis_status: str = "ok"
+    try:
+        from sqlalchemy import text
+
+        async with engine.connect() as conn:
+            await conn.execute(text("SELECT 1"))
+    except Exception as exc:
+        db_status = f"error: {exc}"
+    try:
+        from app.core.cache import get_redis_client
+
+        r = await get_redis_client()
+        await r.ping()
+    except Exception as exc:
+        redis_status = f"error: {exc}"
+
+    log.info(
+        "server_startup",
+        version=settings.app_version,
+        env=settings.app_env,
+        db=db_status,
+        redis=redis_status,
+        routes=len(_app.routes),
+        log_format=settings.log_format,
+        log_level=settings.log_level,
+    )
+
     yield
+
     await engine.dispose()
     from app.core.cache import close_redis
 
     await close_redis()
+    log.info("server_shutdown", reason="lifespan_exit")
 
 
 def create_app() -> FastAPI:
     settings = get_settings()
+    from app.core.logging import configure_logging
+
+    configure_logging(settings)
     app = FastAPI(
         title=settings.app_name,
         version=settings.app_version,
@@ -62,21 +101,21 @@ def create_app() -> FastAPI:
             cookie_samesite="lax",
             header_name="x-csrf-token",
             exempt_urls=[
-                r"^/health$",
-                r"^/ready$",
-                r"^/\.well-known/",
-                r"^/api/v1/auth/login$",
-                r"^/api/v1/auth/register$",
-                r"^/api/v1/auth/forgot-password$",
-                r"^/api/v1/auth/reset-password$",
-                r"^/api/v1/auth/verify-email/",
-                r"^/api/v1/auth/mfa/verify$",
-                r"^/api/v1/invites/validate/",
-                r"^/api/v1/invites/accept$",
-                r"^/api/v1/onboarding/",
-                r"^/docs",
-                r"^/openapi",
-                r"^/metrics",
+                re.compile(r"^/health$"),
+                re.compile(r"^/ready$"),
+                re.compile(r"^/\.well-known/"),
+                re.compile(r"^/api/v1/auth/login$"),
+                re.compile(r"^/api/v1/auth/register$"),
+                re.compile(r"^/api/v1/auth/forgot-password$"),
+                re.compile(r"^/api/v1/auth/reset-password$"),
+                re.compile(r"^/api/v1/auth/verify-email/"),
+                re.compile(r"^/api/v1/auth/mfa/verify$"),
+                re.compile(r"^/api/v1/invites/validate/"),
+                re.compile(r"^/api/v1/invites/accept$"),
+                re.compile(r"^/api/v1/onboarding/"),
+                re.compile(r"^/docs"),
+                re.compile(r"^/openapi"),
+                re.compile(r"^/metrics"),
             ],
         )
     except ImportError:
