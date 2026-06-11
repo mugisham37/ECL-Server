@@ -121,3 +121,128 @@ def purge_expired_token_blacklist() -> int:
             return result.rowcount  # type: ignore[return-value]
 
     return _run(_run_async())
+
+
+@celery_app.task(name="process_email_outbox")
+def process_email_outbox() -> dict:  # type: ignore[type-arg]
+    """Dispatch pending outbox rows to Celery. Runs every 30 s via beat.
+
+    Uses NullPool to avoid asyncpg connection reuse across event loops.
+    Rows that fail 5 times are moved to dead_letter and surface in /health.
+    """
+    async def _run_async() -> dict:  # type: ignore[type-arg]
+        from datetime import UTC, datetime
+
+        from sqlalchemy import select
+        from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
+        from sqlalchemy.pool import NullPool
+
+        from app.config import get_settings
+        from app.core.logging import get_logger
+        from app.modules.email_outbox.models import EmailOutbox
+        from app.tasks.email_tasks import (
+            send_invite_email,
+            send_password_changed_email,
+            send_reset_password_email,
+            send_verification_email,
+            send_welcome_email,
+            send_welcome_to_tenant_email,
+        )
+
+        DISPATCH = {
+            "send_verification_email": lambda p: send_verification_email.delay(
+                p["user_id"], p["raw_token"]
+            ),
+            "send_reset_password_email": lambda p: send_reset_password_email.delay(
+                p["user_id"], p["raw_token"], p.get("ip_address")
+            ),
+            "send_password_changed_email": lambda p: send_password_changed_email.delay(
+                p["user_id"], p.get("ip_address")
+            ),
+            "send_invite_email": lambda p: send_invite_email.delay(
+                p["invitation_id"], p["raw_token"]
+            ),
+            "send_welcome_email": lambda p: send_welcome_email.delay(
+                p["user_id"], p["tenant_id"]
+            ),
+            "send_welcome_to_tenant_email": lambda p: send_welcome_to_tenant_email.delay(
+                p["user_id"], p["tenant_id"]
+            ),
+        }
+
+        log = get_logger("email.outbox")
+        s = get_settings()
+        engine = create_async_engine(s.database_url, poolclass=NullPool)
+        dispatched = dead_lettered = skipped = 0
+        try:
+            async with AsyncSession(engine) as db:
+                rows = (
+                    await db.execute(
+                        select(EmailOutbox)
+                        .where(EmailOutbox.status == "pending")
+                        .order_by(EmailOutbox.created_at)
+                        .limit(100)
+                        .with_for_update(skip_locked=True)
+                    )
+                ).scalars().all()
+
+                now = datetime.now(UTC)
+                for row in rows:
+                    row.dispatch_attempts += 1
+                    dispatch_fn = DISPATCH.get(row.task_name)
+                    if dispatch_fn is None:
+                        row.status = "dead_letter"
+                        row.last_dispatch_error = f"unknown task_name: {row.task_name!r}"
+                        dead_lettered += 1
+                        log.error(
+                            "email_outbox_unknown_task",
+                            outbox_id=row.id,
+                            task_name=row.task_name,
+                        )
+                        continue
+                    try:
+                        dispatch_fn(row.payload)
+                        row.status = "dispatched"
+                        row.dispatched_at = now
+                        dispatched += 1
+                        log.info(
+                            "email_outbox_dispatched",
+                            outbox_id=row.id,
+                            task_name=row.task_name,
+                        )
+                    except Exception as exc:
+                        row.last_dispatch_error = str(exc)[:500]
+                        if row.dispatch_attempts >= 5:
+                            row.status = "dead_letter"
+                            dead_lettered += 1
+                            log.error(
+                                "email_outbox_dead_letter",
+                                outbox_id=row.id,
+                                task_name=row.task_name,
+                                attempts=row.dispatch_attempts,
+                                error=str(exc),
+                            )
+                        else:
+                            skipped += 1
+                            log.warning(
+                                "email_outbox_dispatch_failed",
+                                outbox_id=row.id,
+                                task_name=row.task_name,
+                                attempts=row.dispatch_attempts,
+                                error=str(exc),
+                            )
+
+                await db.commit()
+        finally:
+            await engine.dispose()
+
+        if dispatched or dead_lettered:
+            log.info(
+                "email_outbox_poll_done",
+                dispatched=dispatched,
+                dead_lettered=dead_lettered,
+                skipped=skipped,
+            )
+        return {"dispatched": dispatched, "dead_lettered": dead_lettered, "skipped": skipped}
+
+    return _run(_run_async())

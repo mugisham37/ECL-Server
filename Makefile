@@ -1,5 +1,5 @@
 .PHONY: help up down logs shell migrate migrate-down test test-cov lint type-check \
-        format security-scan generate-keys seed-admin seed-dev clean worker worker-beat
+        format security-scan generate-keys seed-admin seed-dev clean worker worker-beat dev-all
 
 GIT_COMMIT = git -c user.email=dev@eclplatform.com -c user.name="ECL Developer" commit
 
@@ -71,7 +71,14 @@ dev: ## Show commands to start all dev services (run each in a separate terminal
 	@echo "  Terminal 3 (worker):          make worker"
 	@echo ""
 	@echo "  All three must be running for email delivery to work."
+	@echo "  Without the Celery worker, signup succeeds but no emails are sent."
 	@echo ""
+
+dev-all: ## Start API + Celery worker+beat together (requires: make up first)
+	honcho start
+
+dev-check: ## Verify Redis is reachable on the configured Celery broker port
+	@.venv/bin/python -c "from app.config import get_settings; import redis; s=get_settings(); r=redis.from_url(s.redis_celery_url); r.ping(); print('Redis OK:', s.redis_celery_url)"
 
 clean: ## Remove caches
 	find . -type f -name "*.pyc" -delete

@@ -270,15 +270,16 @@ async def register_user(
     )
     auth_resp.message = "Registration successful"
 
+    from app.core.email_dispatch import queue_email_in_outbox
     from app.modules.audit.models import AuditEvent
     from app.modules.audit.service import log_event
-    from app.tasks.email_tasks import send_verification_email
 
     await log_event(db, AuditEvent.USER_REGISTER, user_id=user.id, ip=ip, user_agent=user_agent)
-    try:
-        send_verification_email.delay(user.id, raw_verify)
-    except Exception:
-        _log.warning("email_task_dispatch_failed", task="send_verification_email", user_id=user.id)
+    queue_email_in_outbox(
+        db,
+        task_name="send_verification_email",
+        payload={"user_id": user.id, "raw_token": raw_verify},
+    )
     return auth_resp
 
 
@@ -620,15 +621,16 @@ async def forgot_password(db: AsyncSession, request: ForgotPasswordRequest, ip: 
             )
         )
 
+        from app.core.email_dispatch import queue_email_in_outbox
         from app.modules.audit.models import AuditEvent
         from app.modules.audit.service import log_event
-        from app.tasks.email_tasks import send_reset_password_email  # noqa: PLC0415
 
         await log_event(db, AuditEvent.PASSWORD_RESET_REQ, user_id=user.id, ip=ip)
-        try:
-            send_reset_password_email.delay(user.id, raw, ip)
-        except Exception:
-            _log.warning("email_task_dispatch_failed", task="send_reset_password_email", user_id=user.id)
+        queue_email_in_outbox(
+            db,
+            task_name="send_reset_password_email",
+            payload={"user_id": user.id, "raw_token": raw, "ip_address": ip},
+        )
 
 
 async def reset_password(db: AsyncSession, request: ResetPasswordRequest, ip: str = "") -> None:
@@ -663,15 +665,16 @@ async def reset_password(db: AsyncSession, request: ResetPasswordRequest, ip: st
 
     await db.execute(delete(Session).where(Session.user_id == user.id))
 
+    from app.core.email_dispatch import queue_email_in_outbox
     from app.modules.audit.models import AuditEvent
     from app.modules.audit.service import log_event
-    from app.tasks.email_tasks import send_password_changed_email  # noqa: PLC0415
 
     await log_event(db, AuditEvent.PASSWORD_RESET_DONE, user_id=user.id, ip=ip)
-    try:
-        send_password_changed_email.delay(user.id, ip)
-    except Exception:
-        _log.warning("email_task_dispatch_failed", task="send_password_changed_email", user_id=user.id)
+    queue_email_in_outbox(
+        db,
+        task_name="send_password_changed_email",
+        payload={"user_id": user.id, "ip_address": ip},
+    )
 
 
 async def verify_email(db: AsyncSession, raw_token: str) -> None:
@@ -735,12 +738,13 @@ async def resend_verification_email(
         )
     )
 
-    from app.tasks.email_tasks import send_verification_email
+    from app.core.email_dispatch import queue_email_in_outbox
 
-    try:
-        send_verification_email.delay(user.id, raw_verify)
-    except Exception:
-        _log.warning("email_task_dispatch_failed", task="send_verification_email", user_id=user.id)
+    queue_email_in_outbox(
+        db,
+        task_name="send_verification_email",
+        payload={"user_id": user.id, "raw_token": raw_verify},
+    )
 
 
 async def switch_tenant(

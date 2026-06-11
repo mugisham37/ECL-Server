@@ -3,7 +3,11 @@ import concurrent.futures
 from contextlib import asynccontextmanager
 from typing import Any
 
+from app.core.email_task_utils import handle_email_task_exception
+from app.core.logging import get_logger
 from app.tasks.celery_app import celery_app
+
+_log = get_logger("email")
 
 
 def _run(coro) -> Any:  # type: ignore[no-untyped-def]
@@ -45,11 +49,36 @@ async def _task_session():  # type: ignore[no-untyped-def]
         await engine.dispose()
 
 
-@celery_app.task(name="send_verification_email", bind=True)
-def send_verification_email(self, user_id: str, raw_token: str) -> None:  # type: ignore[misc]
-    from app.core.logging import get_logger
+def _retry_not_committed(task, entity_label: str, entity_id: str) -> None:
+    retries = task.request.retries
+    _log.warning(
+        "email_entity_not_found",
+        task=task.name,
+        entity=entity_label,
+        entity_id=entity_id,
+        retries=retries,
+    )
+    if retries >= task.max_retries:
+        _log.error(
+            "email_send_gave_up",
+            task=task.name,
+            entity=entity_label,
+            entity_id=entity_id,
+            reason="entity_not_committed",
+        )
+        return
+    raise task.retry(
+        countdown=2,
+        max_retries=3,
+        exc=RuntimeError(f"{entity_label} {entity_id} not committed yet — will retry"),
+    )
 
-    async def _send() -> bool:
+
+@celery_app.task(name="send_verification_email", bind=True, max_retries=3)
+def send_verification_email(self, user_id: str, raw_token: str) -> None:  # type: ignore[misc]
+    _log.info("email_task_started", task="send_verification_email", user_id=user_id)
+
+    async def _send() -> tuple[bool, str | None]:
         from sqlalchemy import select
 
         from app.config import get_settings
@@ -62,7 +91,7 @@ def send_verification_email(self, user_id: str, raw_token: str) -> None:  # type
             user = result.scalar_one_or_none()
 
         if not user:
-            return False
+            return False, None
 
         await send_email(
             to=user.email,
@@ -73,33 +102,33 @@ def send_verification_email(self, user_id: str, raw_token: str) -> None:  # type
                 "verify_url": f"{s.frontend_url}/verify-email?token={raw_token}",
             },
         )
-        return True
+        return True, user.email
 
     try:
-        found = _run(_send())
+        found, recipient = _run(_send())
     except Exception as exc:
-        get_logger("email").warning(
-            "email_send_failed",
-            task="send_verification_email",
-            user_id=user_id,
-            exc=str(exc),
-            exc_info=True,
+        handle_email_task_exception(
+            self, exc, task_name="send_verification_email", user_id=user_id
         )
         return
 
     if not found:
-        raise self.retry(
-            countdown=2,
-            max_retries=3,
-            exc=RuntimeError(f"user {user_id} not committed yet — will retry"),
-        )
+        _retry_not_committed(self, "user", user_id)
+        return
+
+    _log.info(
+        "email_task_completed",
+        task="send_verification_email",
+        user_id=user_id,
+        recipient=recipient,
+    )
 
 
-@celery_app.task(name="send_reset_password_email", bind=True)
+@celery_app.task(name="send_reset_password_email", bind=True, max_retries=3)
 def send_reset_password_email(self, user_id: str, raw_token: str, ip_address: str) -> None:  # type: ignore[misc]
-    from app.core.logging import get_logger
+    _log.info("email_task_started", task="send_reset_password_email", user_id=user_id)
 
-    async def _send() -> bool:
+    async def _send() -> tuple[bool, str | None]:
         from sqlalchemy import select
 
         from app.config import get_settings
@@ -112,7 +141,7 @@ def send_reset_password_email(self, user_id: str, raw_token: str, ip_address: st
             user = result.scalar_one_or_none()
 
         if not user:
-            return False
+            return False, None
 
         await send_email(
             to=user.email,
@@ -124,33 +153,33 @@ def send_reset_password_email(self, user_id: str, raw_token: str, ip_address: st
                 "ip_address": ip_address,
             },
         )
-        return True
+        return True, user.email
 
     try:
-        found = _run(_send())
+        found, recipient = _run(_send())
     except Exception as exc:
-        get_logger("email").warning(
-            "email_send_failed",
-            task="send_reset_password_email",
-            user_id=user_id,
-            exc=str(exc),
-            exc_info=True,
+        handle_email_task_exception(
+            self, exc, task_name="send_reset_password_email", user_id=user_id
         )
         return
 
     if not found:
-        raise self.retry(
-            countdown=2,
-            max_retries=3,
-            exc=RuntimeError(f"user {user_id} not committed yet — will retry"),
-        )
+        _retry_not_committed(self, "user", user_id)
+        return
+
+    _log.info(
+        "email_task_completed",
+        task="send_reset_password_email",
+        user_id=user_id,
+        recipient=recipient,
+    )
 
 
-@celery_app.task(name="send_invite_email", bind=True)
+@celery_app.task(name="send_invite_email", bind=True, max_retries=3)
 def send_invite_email(self, invitation_id: str, raw_token: str) -> None:  # type: ignore[misc]
-    from app.core.logging import get_logger
+    _log.info("email_task_started", task="send_invite_email", invitation_id=invitation_id)
 
-    async def _send() -> bool:
+    async def _send() -> tuple[bool, str | None]:
         from sqlalchemy import select
 
         from app.config import get_settings
@@ -170,7 +199,7 @@ def send_invite_email(self, invitation_id: str, raw_token: str) -> None:  # type
             row = result.first()
 
         if not row:
-            return False
+            return False, None
 
         inv, tenant, inviter = row
         await send_email(
@@ -184,33 +213,38 @@ def send_invite_email(self, invitation_id: str, raw_token: str) -> None:  # type
                 "accept_url": f"{s.frontend_url}/invite?token={raw_token}",
             },
         )
-        return True
+        return True, inv.email
 
     try:
-        found = _run(_send())
+        found, recipient = _run(_send())
     except Exception as exc:
-        get_logger("email").warning(
-            "email_send_failed",
-            task="send_invite_email",
-            invitation_id=invitation_id,
-            exc=str(exc),
-            exc_info=True,
+        handle_email_task_exception(
+            self, exc, task_name="send_invite_email", invitation_id=invitation_id
         )
         return
 
     if not found:
-        raise self.retry(
-            countdown=2,
-            max_retries=3,
-            exc=RuntimeError(f"invitation {invitation_id} not committed yet — will retry"),
-        )
+        _retry_not_committed(self, "invitation", invitation_id)
+        return
+
+    _log.info(
+        "email_task_completed",
+        task="send_invite_email",
+        invitation_id=invitation_id,
+        recipient=recipient,
+    )
 
 
-@celery_app.task(name="send_welcome_email", bind=True)
+@celery_app.task(name="send_welcome_email", bind=True, max_retries=3)
 def send_welcome_email(self, user_id: str, tenant_id: str) -> None:  # type: ignore[misc]
-    from app.core.logging import get_logger
+    _log.info(
+        "email_task_started",
+        task="send_welcome_email",
+        user_id=user_id,
+        tenant_id=tenant_id,
+    )
 
-    async def _send() -> bool:
+    async def _send() -> tuple[bool, str | None]:
         from sqlalchemy import select
 
         from app.config import get_settings
@@ -226,7 +260,7 @@ def send_welcome_email(self, user_id: str, tenant_id: str) -> None:  # type: ign
             tenant = tenant_r.scalar_one_or_none()
 
         if not user or not tenant:
-            return False
+            return False, None
 
         await send_email(
             to=user.email,
@@ -238,36 +272,45 @@ def send_welcome_email(self, user_id: str, tenant_id: str) -> None:  # type: ign
                 "dashboard_url": f"{s.frontend_url}/dashboard",
             },
         )
-        return True
+        return True, user.email
 
     try:
-        found = _run(_send())
+        found, recipient = _run(_send())
     except Exception as exc:
-        get_logger("email").warning(
-            "email_send_failed",
-            task="send_welcome_email",
+        handle_email_task_exception(
+            self,
+            exc,
+            task_name="send_welcome_email",
             user_id=user_id,
-            exc=str(exc),
-            exc_info=True,
+            tenant_id=tenant_id,
         )
         return
 
     if not found:
-        raise self.retry(
-            countdown=2,
-            max_retries=3,
-            exc=RuntimeError(f"user {user_id} or tenant {tenant_id} not committed yet — will retry"),
-        )
+        _retry_not_committed(self, "user_or_tenant", f"{user_id}/{tenant_id}")
+        return
+
+    _log.info(
+        "email_task_completed",
+        task="send_welcome_email",
+        user_id=user_id,
+        tenant_id=tenant_id,
+        recipient=recipient,
+    )
 
 
 @celery_app.task(name="send_welcome_to_tenant_email", bind=True)
 def send_welcome_to_tenant_email(self, user_id: str, tenant_id: str) -> None:  # type: ignore[misc]
     try:
         send_welcome_email.apply_async(args=[user_id, tenant_id])
+        _log.info(
+            "email_task_dispatched",
+            task="send_welcome_email",
+            user_id=user_id,
+            tenant_id=tenant_id,
+        )
     except Exception as exc:
-        from app.core.logging import get_logger
-
-        get_logger("email").warning(
+        _log.warning(
             "email_task_dispatch_failed",
             task="send_welcome_to_tenant_email",
             user_id=user_id,
@@ -276,11 +319,11 @@ def send_welcome_to_tenant_email(self, user_id: str, tenant_id: str) -> None:  #
         )
 
 
-@celery_app.task(name="send_password_changed_email", bind=True)
+@celery_app.task(name="send_password_changed_email", bind=True, max_retries=3)
 def send_password_changed_email(self, user_id: str, ip_address: str) -> None:  # type: ignore[misc]
-    from app.core.logging import get_logger
+    _log.info("email_task_started", task="send_password_changed_email", user_id=user_id)
 
-    async def _send() -> bool:
+    async def _send() -> tuple[bool, str | None]:
         from sqlalchemy import select
 
         from app.config import get_settings
@@ -293,7 +336,7 @@ def send_password_changed_email(self, user_id: str, ip_address: str) -> None:  #
             user = result.scalar_one_or_none()
 
         if not user:
-            return False
+            return False, None
 
         await send_email(
             to=user.email,
@@ -305,23 +348,23 @@ def send_password_changed_email(self, user_id: str, ip_address: str) -> None:  #
                 "sessions_url": f"{s.frontend_url}/account/security",
             },
         )
-        return True
+        return True, user.email
 
     try:
-        found = _run(_send())
+        found, recipient = _run(_send())
     except Exception as exc:
-        get_logger("email").warning(
-            "email_send_failed",
-            task="send_password_changed_email",
-            user_id=user_id,
-            exc=str(exc),
-            exc_info=True,
+        handle_email_task_exception(
+            self, exc, task_name="send_password_changed_email", user_id=user_id
         )
         return
 
     if not found:
-        raise self.retry(
-            countdown=2,
-            max_retries=3,
-            exc=RuntimeError(f"user {user_id} not committed yet — will retry"),
-        )
+        _retry_not_committed(self, "user", user_id)
+        return
+
+    _log.info(
+        "email_task_completed",
+        task="send_password_changed_email",
+        user_id=user_id,
+        recipient=recipient,
+    )

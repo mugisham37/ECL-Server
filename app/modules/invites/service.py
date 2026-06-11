@@ -150,16 +150,17 @@ async def accept_invite(
     )
     auth.message = "Invite accepted"
 
+    from app.core.email_dispatch import queue_email_in_outbox
     from app.modules.audit.models import AuditEvent
     from app.modules.audit.service import log_event
-    from app.tasks.email_tasks import send_welcome_to_tenant_email  # noqa: PLC0415
 
     await log_event(db, AuditEvent.INVITE_ACCEPTED, user_id=user.id,
                     ip=ip, details={"tenant_id": inv.tenant_id})
-    try:
-        send_welcome_to_tenant_email.delay(user.id, inv.tenant_id)
-    except Exception:
-        _log.warning("email_task_dispatch_failed", task="send_welcome_to_tenant_email", user_id=user.id)
+    queue_email_in_outbox(
+        db,
+        task_name="send_welcome_to_tenant_email",
+        payload={"user_id": user.id, "tenant_id": inv.tenant_id},
+    )
     return auth
 
 
@@ -218,16 +219,17 @@ async def send_invite(
     await db.flush()
     inv._raw_token = raw  # type: ignore[attr-defined]
 
+    from app.core.email_dispatch import queue_email_in_outbox
     from app.modules.audit.models import AuditEvent
     from app.modules.audit.service import log_event
-    from app.tasks.email_tasks import send_invite_email  # noqa: PLC0415
 
     await log_event(db, AuditEvent.INVITE_SENT, user_id=inviter.id,
                     details={"email": request.email, "role": request.role})
-    try:
-        send_invite_email.delay(inv.id, raw)
-    except Exception:
-        _log.warning("email_task_dispatch_failed", task="send_invite_email", invitation_id=inv.id)
+    queue_email_in_outbox(
+        db,
+        task_name="send_invite_email",
+        payload={"invitation_id": inv.id, "raw_token": raw},
+    )
     return inv
 
 
@@ -296,15 +298,16 @@ async def batch_send_invites(
 
     await db.flush()
 
+    from app.core.email_dispatch import queue_email_in_outbox
     from app.modules.audit.models import AuditEvent
     from app.modules.audit.service import log_event
-    from app.tasks.email_tasks import send_invite_email  # noqa: PLC0415
 
     for inv, raw in created:
-        try:
-            send_invite_email.delay(inv.id, raw)
-        except Exception:
-            _log.warning("email_task_dispatch_failed", task="send_invite_email", invitation_id=inv.id)
+        queue_email_in_outbox(
+            db,
+            task_name="send_invite_email",
+            payload={"invitation_id": inv.id, "raw_token": raw},
+        )
 
     await log_event(
         db, AuditEvent.INVITE_BATCH_SENT, user_id=inviter.id,

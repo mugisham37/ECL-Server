@@ -107,15 +107,16 @@ async def complete_onboarding(
 
         await db.flush()
 
+        from app.core.email_dispatch import queue_email_in_outbox
         from app.modules.audit.models import AuditEvent
         from app.modules.audit.service import log_event
-        from app.tasks.email_tasks import send_invite_email  # noqa: PLC0415
 
         for inv, raw in invites_created:
-            try:
-                send_invite_email.delay(inv.id, raw)
-            except Exception:
-                _log.warning("email_task_dispatch_failed", task="send_invite_email", invitation_id=inv.id)
+            queue_email_in_outbox(
+                db,
+                task_name="send_invite_email",
+                payload={"invitation_id": inv.id, "raw_token": raw},
+            )
 
         await log_event(
             db,
@@ -129,12 +130,13 @@ async def complete_onboarding(
     tenant.onboarding_progress = None
 
     # 6. Send welcome email to the admin who completed onboarding
-    from app.tasks.email_tasks import send_welcome_email  # noqa: PLC0415
+    from app.core.email_dispatch import queue_email_in_outbox
 
-    try:
-        send_welcome_email.delay(user.id, tenant_id)
-    except Exception:
-        _log.warning("email_task_dispatch_failed", task="send_welcome_email", user_id=user.id)
+    queue_email_in_outbox(
+        db,
+        task_name="send_welcome_email",
+        payload={"user_id": user.id, "tenant_id": tenant_id},
+    )
 
     # 7. Audit
     from app.modules.audit.models import AuditEvent

@@ -55,6 +55,7 @@ dev = [
     "bandit>=1.7",
     "pip-audit>=2.7",
     "types-aiobotocore-s3>=2.13",
+    "honcho>=1.1",
 ]
 
 [build-system]
@@ -85,4 +86,5 @@ asyncio_default_fixture_loop_scope = "session"
 testpaths = ["tests"]
 markers = [
     "integration: tests requiring MinIO, moto, or other external services",
+    "smtp: live SMTP delivery tests (run with -m smtp)",
 ]

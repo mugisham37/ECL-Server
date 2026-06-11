@@ -69,6 +69,7 @@ from app.modules.runs.models import Run, Upload  # noqa: E402
 from app.modules.segments.models import Segment  # noqa: E402
 from app.modules.sessions.models import RefreshToken, Session  # noqa: E402
 from app.modules.tenants.models import Tenant, TenantMembership  # noqa: E402
+from app.modules.email_outbox.models import EmailOutbox  # noqa: E402
 
 test_engine = create_async_engine(
     os.environ["DATABASE_URL"],
@@ -78,6 +79,7 @@ test_engine = create_async_engine(
 TestSessionLocal = async_sessionmaker(test_engine, class_=AsyncSession, expire_on_commit=False)
 
 _CLEAN_ORDER = [
+    EmailOutbox,
     AuditLog,
     EadResult,
     LgdResult,

@@ -56,6 +56,10 @@ celery_app.conf.update(
             "task": "purge_expired_token_blacklist",
             "schedule": crontab(minute="*/30"),
         },
+        "process-email-outbox": {
+            "task": "process_email_outbox",
+            "schedule": 30.0,
+        },
     },
     task_annotations={
         "pd_task": {

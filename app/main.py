@@ -3,7 +3,7 @@ import re
 from contextlib import asynccontextmanager
 from collections.abc import AsyncIterator
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from slowapi import _rate_limit_exceeded_handler
@@ -40,12 +40,35 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
     except Exception as exc:
         redis_status = f"error: {exc}"
 
+    smtp_status: str = "ok"
+    if settings.smtp_username:
+        import smtplib
+
+        try:
+            with smtplib.SMTP(settings.smtp_host, settings.smtp_port, timeout=5) as s_smtp:
+                s_smtp.ehlo()
+                s_smtp.starttls()
+                s_smtp.ehlo()
+                s_smtp.login(settings.smtp_username, settings.smtp_password)
+        except Exception as exc:
+            smtp_status = f"error: {exc}"
+            log.error(
+                "email_startup_check_failed",
+                smtp_host=settings.smtp_host,
+                smtp_port=settings.smtp_port,
+                smtp_username=settings.smtp_username,
+                exc=str(exc),
+            )
+
+    _app.state.smtp_status = smtp_status
+
     log.info(
         "server_startup",
         version=settings.app_version,
         env=settings.app_env,
         db=db_status,
         redis=redis_status,
+        smtp=smtp_status,
         routes=len(_app.routes),
         log_format=settings.log_format,
         log_level=settings.log_level,
@@ -148,27 +171,80 @@ def create_app() -> FastAPI:
         )
 
     @app.get("/health")
-    async def health() -> dict[str, str]:
+    async def health(request: Request) -> dict[str, object]:
+        import asyncio
+        from sqlalchemy import func, select, text
+
         db_ok = "ok"
         redis_ok = "ok"
-        try:
-            from sqlalchemy import text
+        smtp_ok: str = getattr(request.app.state, "smtp_status", "ok")
+        celery_worker = "ok"
+        email_queue_depth: int = 0
+        outbox_pending: int = 0
+        outbox_dead_letters: int = 0
 
+        try:
             async with engine.connect() as conn:
                 await conn.execute(text("SELECT 1"))
         except Exception:
             db_ok = "error"
+
         try:
             from app.core.cache import get_redis_client
-
             redis = await get_redis_client()
             await redis.ping()
         except Exception:
             redis_ok = "error"
+
+        try:
+            from app.tasks.celery_app import celery_app as _celery
+            pong = await asyncio.get_event_loop().run_in_executor(
+                None, lambda: _celery.control.inspect(timeout=2).ping()
+            )
+            celery_worker = "ok" if pong else "no_workers"
+        except Exception as exc:
+            celery_worker = f"error: {exc}"
+
+        try:
+            import redis.asyncio as _aioredis
+            _r = _aioredis.from_url(settings.redis_celery_url)
+            email_queue_depth = int(await _r.llen("celery") or 0)
+            await _r.aclose()
+        except Exception:
+            pass
+
+        try:
+            from app.modules.email_outbox.models import EmailOutbox
+            async with engine.connect() as conn:
+                r1 = await conn.execute(
+                    select(func.count()).select_from(EmailOutbox).where(
+                        EmailOutbox.status == "pending"
+                    )
+                )
+                outbox_pending = int(r1.scalar() or 0)
+                r2 = await conn.execute(
+                    select(func.count()).select_from(EmailOutbox).where(
+                        EmailOutbox.status == "dead_letter"
+                    )
+                )
+                outbox_dead_letters = int(r2.scalar() or 0)
+        except Exception:
+            pass
+
+        is_degraded = (
+            redis_ok != "ok"
+            or celery_worker not in ("ok", "no_workers")
+            or outbox_dead_letters > 0
+        )
         return {
-            "status": "ok" if db_ok == "ok" and redis_ok == "ok" else "degraded",
+            "status": "degraded" if is_degraded else "ok",
             "db": db_ok,
             "redis": redis_ok,
+            "smtp": smtp_ok,
+            "celery_worker": celery_worker,
+            "email_queue_depth": email_queue_depth,
+            "email_outbox_pending": outbox_pending,
+            "email_outbox_dead_letters": outbox_dead_letters,
             "version": settings.app_version,
         }
 
