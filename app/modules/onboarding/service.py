@@ -46,6 +46,10 @@ async def complete_onboarding(
     if not tenant:
         raise ECLException("RESOURCE_NOT_FOUND", "Tenant not found.", 404)
 
+    # Idempotency: if onboarding was already completed, skip all mutations.
+    if tenant.onboarding_completed_at is not None:
+        return
+
     # 1. Update tenant profile
     tenant.name = req.profile.institution_name.strip()
     tenant.currency = req.profile.currency

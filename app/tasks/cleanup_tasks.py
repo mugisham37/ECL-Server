@@ -174,6 +174,7 @@ def process_email_outbox() -> dict:  # type: ignore[type-arg]
         s = get_settings()
         engine = create_async_engine(s.database_url, poolclass=NullPool)
         dispatched = dead_lettered = skipped = 0
+        found = 0
         try:
             async with AsyncSession(engine) as db:
                 rows = (
@@ -185,6 +186,12 @@ def process_email_outbox() -> dict:  # type: ignore[type-arg]
                         .with_for_update(skip_locked=True)
                     )
                 ).scalars().all()
+
+                found = len(rows)
+                if found:
+                    log.info("email_outbox_poll_start", found_pending=found)
+                else:
+                    log.debug("email_outbox_poll_idle")
 
                 now = datetime.now(UTC)
                 for row in rows:
@@ -209,6 +216,7 @@ def process_email_outbox() -> dict:  # type: ignore[type-arg]
                             "email_outbox_dispatched",
                             outbox_id=row.id,
                             task_name=row.task_name,
+                            payload_keys=list(row.payload.keys()),
                         )
                     except Exception as exc:
                         row.last_dispatch_error = str(exc)[:500]
@@ -236,13 +244,14 @@ def process_email_outbox() -> dict:  # type: ignore[type-arg]
         finally:
             await engine.dispose()
 
-        if dispatched or dead_lettered:
+        if found:
             log.info(
                 "email_outbox_poll_done",
+                found=found,
                 dispatched=dispatched,
                 dead_lettered=dead_lettered,
                 skipped=skipped,
             )
-        return {"dispatched": dispatched, "dead_lettered": dead_lettered, "skipped": skipped}
+        return {"found": found, "dispatched": dispatched, "dead_lettered": dead_lettered, "skipped": skipped}
 
     return _run(_run_async())
