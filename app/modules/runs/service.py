@@ -47,6 +47,10 @@ from app.modules.tenants.models import TenantMembership
 import re as _re
 from decimal import Decimal as _Decimal
 
+from app.core.logging import get_logger
+
+log = get_logger("runs.service")
+
 _COLLATERAL_DEFAULTS: dict[str, dict] = {
     "real estate":          {"haircut": 15.0, "time_to_realize": 18},
     "residential property": {"haircut": 15.0, "time_to_realize": 18},
@@ -90,10 +94,24 @@ def _extract_lgd_collateral_columns(df: pd.DataFrame) -> set[str]:
 async def _auto_provision_segments(
     db: AsyncSession, tenant_id: str, user_id: str, names: set[str]
 ) -> None:
+    from app.modules.segments.models import Segment
     from app.modules.segments.service import batch_create_segments
     from app.modules.segments.schemas import BatchCreateSegmentsRequest, CreateSegmentRequest
+
+    # Check including soft-deleted rows to avoid UniqueViolation on the (tenant_id, name) index
+    result = await db.execute(
+        select(Segment.name).where(
+            Segment.tenant_id == tenant_id,
+            Segment.name.in_(list(names)),
+        )
+    )
+    already_exist = {row[0] for row in result.all()}
+    truly_new = names - already_exist
+    if not truly_new:
+        return
+
     req = BatchCreateSegmentsRequest(segments=[
-        CreateSegmentRequest(name=n, code=_segment_code(n)) for n in sorted(names)
+        CreateSegmentRequest(name=n, code=_segment_code(n)) for n in sorted(truly_new)
     ])
     await batch_create_segments(db, tenant_id, user_id, req)
 
@@ -101,15 +119,29 @@ async def _auto_provision_segments(
 async def _auto_provision_collateral(
     db: AsyncSession, tenant_id: str, user_id: str, names: set[str]
 ) -> None:
+    from app.modules.collateral.models import CollateralType
     from app.modules.collateral.service import batch_create_collateral_types
     from app.modules.collateral.schemas import BatchCreateCollateralTypesRequest, CreateCollateralTypeRequest
+
+    # Check including soft-deleted rows to avoid UniqueViolation on the (tenant_id, name) index
+    result = await db.execute(
+        select(CollateralType.name).where(
+            CollateralType.tenant_id == tenant_id,
+            CollateralType.name.in_(list(names)),
+        )
+    )
+    already_exist = {row[0] for row in result.all()}
+    truly_new = names - already_exist
+    if not truly_new:
+        return
+
     req = BatchCreateCollateralTypesRequest(items=[
         CreateCollateralTypeRequest(
             name=n,
             haircut=_Decimal(str(_collateral_default(n)["haircut"])),
             time_to_realize=_collateral_default(n)["time_to_realize"],
         )
-        for n in sorted(names)
+        for n in sorted(truly_new)
     ])
     await batch_create_collateral_types(db, tenant_id, user_id, req)
 

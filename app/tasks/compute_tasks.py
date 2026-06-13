@@ -167,6 +167,25 @@ async def _mark_run_failed(db, run_id: str, stage: str, exc: Exception) -> None:
     )
 
 
+async def _mark_run_failed_standalone(run_id: str, stage: str, exc: Exception) -> None:
+    """Mark run as failed without requiring an existing DB session.
+
+    Used when a task fails before _fresh_session() succeeds, so the
+    normal _mark_run_failed inside _pd_main etc. can never execute.
+    If this also fails (e.g. DB is down), recover_stuck_runs handles it.
+    """
+    try:
+        async with _fresh_session() as (db, _):
+            await _mark_run_failed(db, run_id, stage, exc)
+    except Exception as db_exc:
+        _log.error(
+            "mark_run_failed_standalone_error",
+            run_id=run_id,
+            stage=stage,
+            exc_info=db_exc,
+        )
+
+
 async def _load_uploads(db, run_id: str, kind: str):
     from app.modules.runs.models import Upload
 
@@ -439,6 +458,9 @@ async def _ead_ecl_main(run_id: str) -> dict[str, str]:
 
     async with _fresh_session() as (db, task_engine):
         run = await _load_run(db, run_id)
+        if run.status == RunStatus.FAILED.value:
+            _log.warning("ead_skipped_run_already_failed", run_id=run_id)
+            return {"run_id": run_id, "stage": "ead", "skipped": True}
         started_at = await _mark_stage_running(db, run.id, "ead", RunStatus.EAD_RUNNING.value)
         _log.info("compute_stage_started", run_id=run_id, stage="ead")
 
@@ -576,26 +598,53 @@ async def _ead_ecl_main(run_id: str) -> dict[str, str]:
 
 @celery_app.task(name="pd_task", bind=True)
 def pd_task(self, run_id: str) -> dict[str, str]:  # type: ignore[misc]
+    _log.info("task_received", run_id=run_id, stage="pd")
     async def _with_prepare():
         await _prepare_task()
         return await _pd_main(run_id)
-    return _run(_with_prepare())
+    try:
+        return _run(_with_prepare())
+    except Exception as exc:
+        _log.error("task_outer_failed", run_id=run_id, stage="pd", exc_info=exc)
+        try:
+            _run(_mark_run_failed_standalone(run_id, "pd", exc))
+        except Exception:
+            pass
+        raise
 
 
 @celery_app.task(name="lgd_task", bind=True)
 def lgd_task(self, run_id: str) -> dict[str, str]:  # type: ignore[misc]
+    _log.info("task_received", run_id=run_id, stage="lgd")
     async def _with_prepare():
         await _prepare_task()
         return await _lgd_main(run_id)
-    return _run(_with_prepare())
+    try:
+        return _run(_with_prepare())
+    except Exception as exc:
+        _log.error("task_outer_failed", run_id=run_id, stage="lgd", exc_info=exc)
+        try:
+            _run(_mark_run_failed_standalone(run_id, "lgd", exc))
+        except Exception:
+            pass
+        raise
 
 
 @celery_app.task(name="ead_ecl_task", bind=True)
 def ead_ecl_task(self, _group_results: list[Any], run_id: str) -> dict[str, str]:  # type: ignore[misc]
+    _log.info("task_received", run_id=run_id, stage="ead")
     async def _with_prepare():
         await _prepare_task()
         return await _ead_ecl_main(run_id)
-    return _run(_with_prepare())
+    try:
+        return _run(_with_prepare())
+    except Exception as exc:
+        _log.error("task_outer_failed", run_id=run_id, stage="ead", exc_info=exc)
+        try:
+            _run(_mark_run_failed_standalone(run_id, "ead", exc))
+        except Exception:
+            pass
+        raise
 
 
 @celery_app.task(name="enqueue_compute_pipeline")

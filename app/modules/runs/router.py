@@ -1,10 +1,12 @@
 from pathlib import Path
 
+from celery import chord, group
 from fastapi import APIRouter, Depends, File, Form, Query, Request, UploadFile, status
 from fastapi.responses import FileResponse
-from app.tasks.compute_tasks import enqueue_compute_pipeline
 
+from app.core.exceptions import ECLException
 from app.core.limiter import limiter
+from app.core.logging import get_logger
 from app.dependencies import (
     CurrentUser,
     DbSession,
@@ -29,6 +31,9 @@ from app.modules.runs.schemas import (
 )
 from app.modules.results import service as results_service
 from app.modules.tenants.models import TenantMembership
+from app.tasks.compute_tasks import ead_ecl_task, lgd_task, pd_task
+
+_log = get_logger("runs.router")
 
 router = APIRouter(prefix="/tenants", tags=["runs"])
 
@@ -149,7 +154,17 @@ async def execute_run_endpoint(
         ip=get_client_ip(request.headers.get("X-Forwarded-For")),
         user_agent=get_user_agent(request.headers.get("User-Agent")),
     )
-    enqueue_compute_pipeline.delay(run_id)
+    await db.commit()
+    try:
+        chord(group(pd_task.s(run_id), lgd_task.s(run_id)))(ead_ecl_task.s(run_id))
+        _log.info("compute_chord_dispatched", run_id=run_id)
+    except Exception as exc:
+        _log.error("compute_chord_dispatch_failed", run_id=run_id, exc_info=exc)
+        raise ECLException(
+            "COMPUTE_DISPATCH_FAILED",
+            "Failed to enqueue the compute job. Check that the message broker (Redis) is running.",
+            503,
+        ) from exc
     return ExecuteRunResponse(data=data)
 
 
