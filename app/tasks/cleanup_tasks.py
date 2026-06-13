@@ -123,6 +123,83 @@ def purge_expired_token_blacklist() -> int:
     return _run(_run_async())
 
 
+@celery_app.task(name="recover_stuck_runs")
+def recover_stuck_runs() -> dict:  # type: ignore[type-arg]
+    """Mark runs that are stuck in queued/running states as failed.
+
+    Queued > 10 min → worker never picked it up.
+    Running > 45 min → exceeds the hard compute time limit; Celery killed the task
+    without updating the DB status.
+    """
+    async def _run_async() -> dict:  # type: ignore[type-arg]
+        from datetime import UTC, datetime, timedelta
+
+        from sqlalchemy import select, update
+
+        from app.core.logging import get_logger
+        from app.database import AsyncSessionLocal
+        from app.modules.runs.models import Run
+
+        log = get_logger("cleanup.stuck_runs")
+        now = datetime.now(UTC)
+        queued_cutoff = now - timedelta(minutes=10)
+        running_cutoff = now - timedelta(minutes=45)
+
+        stuck_queued_msg = "Compute job was not picked up by a worker within the timeout window. Ensure the Celery worker is running and try again."
+        stuck_running_msg = "Compute stage exceeded the maximum allowed runtime and was forcibly stopped. Please re-run."
+
+        async with AsyncSessionLocal() as db:
+            # Runs stuck in queued
+            queued_result = await db.execute(
+                update(Run)
+                .where(
+                    Run.status == "queued",
+                    Run.updated_at < queued_cutoff,
+                    Run.deleted_at.is_(None),
+                )
+                .values(
+                    status="failed",
+                    failure_stage="queued",
+                    failure_message=stuck_queued_msg,
+                    finished_at=now,
+                )
+            )
+            queued_count: int = queued_result.rowcount  # type: ignore[assignment]
+
+            # Runs stuck in a compute stage
+            running_result = await db.execute(
+                update(Run)
+                .where(
+                    Run.status.in_(["pd_running", "lgd_running", "ead_running"]),
+                    Run.updated_at < running_cutoff,
+                    Run.deleted_at.is_(None),
+                )
+                .values(
+                    status="failed",
+                    failure_stage="timeout",
+                    failure_message=stuck_running_msg,
+                    finished_at=now,
+                )
+            )
+            running_count: int = running_result.rowcount  # type: ignore[assignment]
+
+            await db.commit()
+
+        total = queued_count + running_count
+        if total > 0:
+            log.warning(
+                "stuck_runs_recovered",
+                queued_recovered=queued_count,
+                running_recovered=running_count,
+            )
+        else:
+            log.debug("stuck_runs_check_idle")
+
+        return {"queued_recovered": queued_count, "running_recovered": running_count}
+
+    return _run(_run_async())
+
+
 @celery_app.task(name="process_email_outbox")
 def process_email_outbox() -> dict:  # type: ignore[type-arg]
     """Dispatch pending outbox rows to Celery. Runs every 30 s via beat.

@@ -44,6 +44,76 @@ from app.modules.runs.models import Run, Upload
 from app.modules.tenants.models import TenantMembership
 
 
+import re as _re
+from decimal import Decimal as _Decimal
+
+_COLLATERAL_DEFAULTS: dict[str, dict] = {
+    "real estate":          {"haircut": 15.0, "time_to_realize": 18},
+    "residential property": {"haircut": 15.0, "time_to_realize": 18},
+    "commercial property":  {"haircut": 20.0, "time_to_realize": 24},
+    "land":                 {"haircut": 20.0, "time_to_realize": 24},
+    "motor vehicle":        {"haircut": 25.0, "time_to_realize": 6},
+    "vehicle":              {"haircut": 25.0, "time_to_realize": 6},
+    "cash deposit":         {"haircut": 0.0,  "time_to_realize": 0},
+    "cash":                 {"haircut": 0.0,  "time_to_realize": 0},
+    "deposit":              {"haircut": 0.0,  "time_to_realize": 1},
+    "corporate guarantee":  {"haircut": 20.0, "time_to_realize": 12},
+    "personal guarantee":   {"haircut": 30.0, "time_to_realize": 12},
+    "guarantee":            {"haircut": 25.0, "time_to_realize": 12},
+    "equipment":            {"haircut": 30.0, "time_to_realize": 12},
+    "machinery":            {"haircut": 35.0, "time_to_realize": 12},
+    "government bond":      {"haircut": 5.0,  "time_to_realize": 1},
+    "bond":                 {"haircut": 10.0, "time_to_realize": 3},
+    "stock":                {"haircut": 30.0, "time_to_realize": 5},
+    "shares":               {"haircut": 30.0, "time_to_realize": 5},
+    "insurance":            {"haircut": 20.0, "time_to_realize": 6},
+    "inventory":            {"haircut": 50.0, "time_to_realize": 6},
+    "receivables":          {"haircut": 40.0, "time_to_realize": 3},
+}
+_COLLATERAL_FALLBACK: dict = {"haircut": 50.0, "time_to_realize": 24}
+
+
+def _collateral_default(name: str) -> dict:
+    return _COLLATERAL_DEFAULTS.get(name.strip().lower(), _COLLATERAL_FALLBACK)
+
+
+def _segment_code(name: str) -> str:
+    return _re.sub(r"[^A-Z0-9_]", "_", name.strip().upper())[:20]
+
+
+def _extract_lgd_collateral_columns(df: pd.DataFrame) -> set[str]:
+    from app.engine.validators.lgd_validator import LGD_REQUIRED_COLUMNS, _EIR_ALIASES
+    known = set(LGD_REQUIRED_COLUMNS) | set(_EIR_ALIASES)
+    return {c for c in df.columns if c not in known}
+
+
+async def _auto_provision_segments(
+    db: AsyncSession, tenant_id: str, user_id: str, names: set[str]
+) -> None:
+    from app.modules.segments.service import batch_create_segments
+    from app.modules.segments.schemas import BatchCreateSegmentsRequest, CreateSegmentRequest
+    req = BatchCreateSegmentsRequest(segments=[
+        CreateSegmentRequest(name=n, code=_segment_code(n)) for n in sorted(names)
+    ])
+    await batch_create_segments(db, tenant_id, user_id, req)
+
+
+async def _auto_provision_collateral(
+    db: AsyncSession, tenant_id: str, user_id: str, names: set[str]
+) -> None:
+    from app.modules.collateral.service import batch_create_collateral_types
+    from app.modules.collateral.schemas import BatchCreateCollateralTypesRequest, CreateCollateralTypeRequest
+    req = BatchCreateCollateralTypesRequest(items=[
+        CreateCollateralTypeRequest(
+            name=n,
+            haircut=_Decimal(str(_collateral_default(n)["haircut"])),
+            time_to_realize=_collateral_default(n)["time_to_realize"],
+        )
+        for n in sorted(names)
+    ])
+    await batch_create_collateral_types(db, tenant_id, user_id, req)
+
+
 def get_run_scope_filter(
     user: User,
     tenant_id: str,
@@ -107,7 +177,6 @@ from app.modules.runs.schemas import (
 )
 from app.modules.segments.models import Segment
 from app.modules.tenants.models import Tenant
-from app.tasks.compute_tasks import enqueue_compute_pipeline
 
 _AUDIT_DISPLAY: dict[str, tuple[str, str, str]] = {
     AuditEvent.RUN_CREATED.value: ("accent", "Plus", "Run created"),
@@ -629,6 +698,31 @@ async def upload_file(
     )
 
 
+async def delete_upload(
+    db: AsyncSession,
+    tenant_id: str,
+    run_id: str,
+    upload_id: str,
+    user_id: str,
+) -> None:
+    run = await _get_run(db, tenant_id, run_id)
+    if run.status not in (RunStatus.DRAFT.value, RunStatus.FAILED.value):
+        raise ECLException(
+            "RUN_NOT_UPLOADABLE",
+            "Files can only be modified on draft or failed runs.",
+            409,
+        )
+    result = await db.execute(
+        select(Upload).where(Upload.id == upload_id, Upload.run_id == run_id)
+    )
+    upload = result.scalar_one_or_none()
+    if upload is None:
+        raise ECLException("RESOURCE_NOT_FOUND", "Upload not found.", 404)
+    await delete_object(upload.storage_path)
+    await db.delete(upload)
+    await db.flush()
+
+
 async def validate_files(
     db: AsyncSession,
     tenant_id: str,
@@ -653,17 +747,52 @@ async def validate_files(
         details={"run_id": run_id, "description": "Validation started"},
     )
 
+    # Pre-scan: load all upload data once, extract segments and collateral columns
+    upload_data: dict[str, tuple[dict[str, pd.DataFrame], pd.DataFrame]] = {}
+    prescan_segments: set[str] = set()
+    prescan_collateral: set[str] = set()
+
+    for upload in uploads:
+        content = await download_bytes(upload.storage_path)
+        sheets, _, _ = _parse_excel(content)
+        combined = _combine_sheets(sheets)
+        upload_data[upload.id] = (sheets, combined)
+
+        if upload.kind in (UploadKind.PD.value, UploadKind.EAD.value):
+            if "SEGMENT" in combined.columns:
+                prescan_segments.update(
+                    v for v in combined["SEGMENT"].dropna().astype(str).str.strip().unique() if v
+                )
+        elif upload.kind == UploadKind.LGD.value:
+            prescan_collateral.update(_extract_lgd_collateral_columns(combined))
+
+    # Auto-provision any missing segments and collateral types
     allowed_segments = await _allowed_segments(db, tenant_id)
     allowed_collateral = await _allowed_collateral(db, tenant_id)
+
+    new_segments = prescan_segments - allowed_segments
+    if new_segments:
+        try:
+            await _auto_provision_segments(db, tenant_id, user_id, new_segments)
+            allowed_segments |= new_segments
+        except Exception as exc:
+            log.warning("auto_provision_segments_failed", tenant_id=tenant_id, error=str(exc))
+
+    new_collateral = prescan_collateral - allowed_collateral
+    if new_collateral:
+        try:
+            await _auto_provision_collateral(db, tenant_id, user_id, new_collateral)
+            allowed_collateral |= new_collateral
+        except Exception as exc:
+            log.warning("auto_provision_collateral_failed", tenant_id=tenant_id, error=str(exc))
+
     accepted_ids = set(req.accepted_warning_ids)
 
     all_issues: list[tuple[str, ValidationIssue]] = []
     segment_dfs: list[pd.DataFrame] = []
 
     for upload in uploads:
-        content = await download_bytes(upload.storage_path)
-        sheets, _, _ = _parse_excel(content)
-        combined = _combine_sheets(sheets)
+        sheets, combined = upload_data[upload.id]
         issues: list[ValidationIssue] = []
 
         if upload.kind == UploadKind.PD.value:
@@ -784,8 +913,6 @@ async def execute_run(
     run.started_at = None
     run.finished_at = None
     await db.flush()
-
-    enqueue_compute_pipeline.delay(run_id)
 
     await log_event(
         db,

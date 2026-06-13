@@ -2,6 +2,7 @@ from pathlib import Path
 
 from fastapi import APIRouter, Depends, File, Form, Query, Request, UploadFile, status
 from fastapi.responses import FileResponse
+from app.tasks.compute_tasks import enqueue_compute_pipeline
 
 from app.core.limiter import limiter
 from app.dependencies import (
@@ -94,6 +95,18 @@ async def upload_file_endpoint(
     return UploadResponse(data=data)
 
 
+@router.delete("/{tenant_id}/runs/{run_id}/uploads/{upload_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_upload_endpoint(
+    tenant_id: str,
+    run_id: str,
+    upload_id: str,
+    db: DbSession,
+    user: CurrentUser,
+    _a: TenantMembership = Depends(require_tenant_analyst_or_admin),
+) -> None:
+    await service.delete_upload(db, tenant_id, run_id, upload_id, user.id)
+
+
 @router.post("/{tenant_id}/runs/{run_id}/validate")
 async def validate_files_endpoint(
     tenant_id: str,
@@ -136,6 +149,7 @@ async def execute_run_endpoint(
         ip=get_client_ip(request.headers.get("X-Forwarded-For")),
         user_agent=get_user_agent(request.headers.get("User-Agent")),
     )
+    enqueue_compute_pipeline.delay(run_id)
     return ExecuteRunResponse(data=data)
 
 

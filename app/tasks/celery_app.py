@@ -60,6 +60,10 @@ celery_app.conf.update(
             "task": "process_email_outbox",
             "schedule": 30.0,
         },
+        "recover-stuck-runs": {
+            "task": "recover_stuck_runs",
+            "schedule": 300.0,  # every 5 minutes
+        },
     },
     task_annotations={
         "pd_task": {

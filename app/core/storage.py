@@ -8,6 +8,7 @@ from collections.abc import Callable
 from typing import Any, BinaryIO
 
 from aiobotocore.session import AioSession, get_session
+from fastapi import status
 
 from app.config import Settings, get_settings
 
@@ -95,39 +96,63 @@ def _normalize_key(key: str) -> str:
     return key.lstrip("/")
 
 
+def _storage_error(exc: Exception) -> "ECLException":
+    from app.core.exceptions import ECLException
+    return ECLException(
+        "STORAGE_UNAVAILABLE",
+        "File storage is unavailable. Please try again or contact support.",
+        status.HTTP_503_SERVICE_UNAVAILABLE,
+    )
+
+
 async def upload_stream(
     key: str,
     file_obj: BinaryIO | Any,
     content_type: str,
 ) -> tuple[str, int]:
     """
-    Stream *file_obj* to object storage while computing SHA-256 in 64 KB chunks.
+    Read *file_obj* into memory, compute SHA-256, upload to object storage.
 
     Returns ``(hex_digest, bytes_written)``.
     """
     settings = get_settings()
     client = await get_storage_client()
-    reader = _HashingReader(file_obj)
 
-    await client.put_object(
-        Bucket=settings.storage_bucket_name,
-        Key=_normalize_key(key),
-        Body=reader,
-        ContentType=content_type,
-    )
-    return reader.hex_digest, reader.bytes_written
+    # Read fully into memory — botocore checksum code requires seekable body;
+    # reading upfront avoids that constraint and lets us hash in one pass.
+    if hasattr(file_obj, "read"):
+        raw: bytes = file_obj.read()
+    else:
+        raw = bytes(file_obj)
+
+    sha256 = hashlib.sha256(raw).hexdigest()
+    size = len(raw)
+
+    try:
+        await client.put_object(
+            Bucket=settings.storage_bucket_name,
+            Key=_normalize_key(key),
+            Body=raw,
+            ContentType=content_type,
+        )
+    except Exception as exc:
+        raise _storage_error(exc) from exc
+    return sha256, size
 
 
 async def download_bytes(key: str) -> bytes:
     """Download an object and return its full contents."""
     settings = get_settings()
     client = await get_storage_client()
-    response = await client.get_object(
-        Bucket=settings.storage_bucket_name,
-        Key=_normalize_key(key),
-    )
-    async with response["Body"] as body:
-        return await body.read()
+    try:
+        response = await client.get_object(
+            Bucket=settings.storage_bucket_name,
+            Key=_normalize_key(key),
+        )
+        async with response["Body"] as body:
+            return await body.read()
+    except Exception as exc:
+        raise _storage_error(exc) from exc
 
 
 async def presign_download(key: str, expires_seconds: int = 900) -> str:
@@ -135,24 +160,30 @@ async def presign_download(key: str, expires_seconds: int = 900) -> str:
     settings = get_settings()
     client = await get_storage_client()
     presign: Callable[..., Any] = client.generate_presigned_url
-    url = presign(
-        "get_object",
-        Params={
-            "Bucket": settings.storage_bucket_name,
-            "Key": _normalize_key(key),
-        },
-        ExpiresIn=expires_seconds,
-    )
-    if inspect.isawaitable(url):
-        return await url
-    return url
+    try:
+        url = presign(
+            "get_object",
+            Params={
+                "Bucket": settings.storage_bucket_name,
+                "Key": _normalize_key(key),
+            },
+            ExpiresIn=expires_seconds,
+        )
+        if inspect.isawaitable(url):
+            return await url
+        return url
+    except Exception as exc:
+        raise _storage_error(exc) from exc
 
 
 async def delete_object(key: str) -> None:
     """Delete an object from storage."""
     settings = get_settings()
     client = await get_storage_client()
-    await client.delete_object(
-        Bucket=settings.storage_bucket_name,
-        Key=_normalize_key(key),
-    )
+    try:
+        await client.delete_object(
+            Bucket=settings.storage_bucket_name,
+            Key=_normalize_key(key),
+        )
+    except Exception as exc:
+        raise _storage_error(exc) from exc

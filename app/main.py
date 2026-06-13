@@ -40,6 +40,20 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
     except Exception as exc:
         redis_status = f"error: {exc}"
 
+    storage_status: str = "ok"
+    try:
+        from app.core.storage import init_storage, get_storage_client
+
+        await init_storage()
+        client = await get_storage_client()
+        try:
+            await client.head_bucket(Bucket=settings.storage_bucket_name)
+        except Exception:
+            await client.create_bucket(Bucket=settings.storage_bucket_name)
+            log.info("storage_bucket_created", bucket=settings.storage_bucket_name)
+    except Exception as exc:
+        storage_status = f"error: {exc}"
+
     smtp_status: str = "ok"
     if settings.smtp_username:
         import smtplib
@@ -68,6 +82,7 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
         env=settings.app_env,
         db=db_status,
         redis=redis_status,
+        storage=storage_status,
         smtp=smtp_status,
         routes=len(_app.routes),
         log_format=settings.log_format,
@@ -127,14 +142,18 @@ def create_app() -> FastAPI:
                 re.compile(r"^/health$"),
                 re.compile(r"^/ready$"),
                 re.compile(r"^/\.well-known/"),
-                re.compile(r"^/api/v1/auth/login$"),
-                re.compile(r"^/api/v1/auth/register$"),
-                re.compile(r"^/api/v1/auth/forgot-password$"),
-                re.compile(r"^/api/v1/auth/reset-password$"),
-                re.compile(r"^/api/v1/auth/verify-email/"),
-                re.compile(r"^/api/v1/auth/mfa/verify$"),
-                re.compile(r"^/api/v1/invites/validate/"),
-                re.compile(r"^/api/v1/invites/accept$"),
+                # All auth endpoints (login, refresh, etc.)
+                re.compile(r"^/api/v1/auth/"),
+                # JWT-protected API routes — Bearer tokens are CSRF-immune
+                re.compile(r"^/api/v1/tenants/"),
+                re.compile(r"^/api/v1/results/"),
+                re.compile(r"^/api/v1/platform/"),
+                re.compile(r"^/api/v1/segments/"),
+                re.compile(r"^/api/v1/collateral/"),
+                re.compile(r"^/api/v1/audit/"),
+                re.compile(r"^/api/v1/sessions/"),
+                re.compile(r"^/api/v1/settings/"),
+                re.compile(r"^/api/v1/invites/"),
                 re.compile(r"^/api/v1/onboarding/"),
                 re.compile(r"^/docs"),
                 re.compile(r"^/openapi"),
@@ -177,6 +196,7 @@ def create_app() -> FastAPI:
 
         db_ok = "ok"
         redis_ok = "ok"
+        storage_ok = "ok"
         smtp_ok: str = getattr(request.app.state, "smtp_status", "ok")
         celery_worker = "ok"
         email_queue_depth: int = 0
@@ -195,6 +215,13 @@ def create_app() -> FastAPI:
             await redis.ping()
         except Exception:
             redis_ok = "error"
+
+        try:
+            from app.core.storage import get_storage_client
+            _sc = await get_storage_client()
+            await _sc.head_bucket(Bucket=settings.storage_bucket_name)
+        except Exception as exc:
+            storage_ok = f"error: {exc}"
 
         try:
             from app.tasks.celery_app import celery_app as _celery
@@ -233,6 +260,7 @@ def create_app() -> FastAPI:
 
         is_degraded = (
             redis_ok != "ok"
+            or storage_ok != "ok"
             or celery_worker not in ("ok", "no_workers")
             or outbox_dead_letters > 0
         )
@@ -240,6 +268,7 @@ def create_app() -> FastAPI:
             "status": "degraded" if is_degraded else "ok",
             "db": db_ok,
             "redis": redis_ok,
+            "storage": storage_ok,
             "smtp": smtp_ok,
             "celery_worker": celery_worker,
             "email_queue_depth": email_queue_depth,

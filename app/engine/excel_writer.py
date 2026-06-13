@@ -363,8 +363,8 @@ def build_ecl_aggregates(ead_df: pd.DataFrame, ead_input_df: pd.DataFrame) -> di
     )
     ecl_by_segment = segment_ecl.merge(segment_outstanding, on="Segment", how="left")
     ecl_by_segment["Coverage"] = ecl_by_segment.apply(
-        lambda row: (row["Total ECL"] / row["Total Outstanding"])
-        if row["Total Outstanding"] > 0
+        lambda row: (float(row["Total ECL"]) / float(row["Total Outstanding"]))
+        if float(row["Total Outstanding"]) > 0
         else 0.0,
         axis=1,
     )
@@ -378,7 +378,7 @@ def build_ecl_aggregates(ead_df: pd.DataFrame, ead_input_df: pd.DataFrame) -> di
         .sum()
         .reset_index(name="Total ECL")
     )
-    stage_ecl["Portfolio Share"] = stage_ecl["Total ECL"] / total_ecl if total_ecl > 0 else 0.0
+    stage_ecl["Portfolio Share"] = stage_ecl["Total ECL"].apply(float) / total_ecl if total_ecl > 0 else 0.0
 
     return {
         "ecl_by_loan": loan_ecl,

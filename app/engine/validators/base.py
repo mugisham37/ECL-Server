@@ -236,3 +236,32 @@ def check_allowed_set_membership(
         title=title,
         fix=fix,
     )
+
+
+def check_enum_values_grouped(
+    df: pd.DataFrame,
+    column: str,
+    allowed: frozenset[str] | set[str],
+    *,
+    sheet_name: str,
+    result: ValidationResult,
+    title: str,
+    fix: str,
+) -> None:
+    """Like check_enum_values but emits one issue per unique bad value (not one per row)."""
+    if column not in df.columns or result.remaining_capacity() == 0:
+        return
+
+    invalid_mask = df[column].notna() & ~df[column].astype(str).str.strip().isin(allowed)
+    if not invalid_mask.any():
+        return
+
+    for value, group in df[invalid_mask].groupby(df[column]):
+        if result.remaining_capacity() == 0:
+            break
+        count = len(group)
+        result.add_block(
+            title=title,
+            location=f"{sheet_name}, column {column} ({count} row{'s' if count != 1 else ''})",
+            fix=fix.format(value=value),
+        )

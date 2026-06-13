@@ -8,6 +8,7 @@ from app.engine.validators.base import (
     STAGING_VALUES,
     ValidationResult,
     check_enum_values,
+    check_enum_values_grouped,
     check_non_empty_strings,
     check_numeric_range,
     check_required_columns,
@@ -95,7 +96,7 @@ def validate_pd(
     )
 
     if allowed_segments:
-        check_enum_values(
+        check_enum_values_grouped(
             df,
             "SEGMENT",
             {segment.strip() for segment in allowed_segments},

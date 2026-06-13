@@ -58,7 +58,7 @@ seed-admin: ## Seed platform superadmin
 seed-dev: ## Seed dev data
 	python scripts/seed_dev_data.py
 
-worker: ## Start Celery worker — REQUIRED for email and background tasks
+worker: ## Start Celery worker — REQUIRED for email delivery AND ECL compute
 	celery -A app.tasks.celery_app worker --loglevel=info --concurrency=4
 
 worker-beat: ## Start Celery worker + beat scheduler (periodic cleanup tasks)
@@ -70,8 +70,10 @@ dev: ## Show commands to start all dev services (run each in a separate terminal
 	@echo "  Terminal 2 (api):             uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload"
 	@echo "  Terminal 3 (worker):          make worker"
 	@echo ""
-	@echo "  All three must be running for email delivery to work."
-	@echo "  Without the Celery worker, signup succeeds but no emails are sent."
+	@echo "  The Celery worker is REQUIRED for:"
+	@echo "    - Email delivery (signup, invites, password reset)"
+	@echo "    - ECL compute (PD / LGD / EAD / ECL engines)"
+	@echo "  Without it: emails are not sent AND compute stays stuck at 0%."
 	@echo ""
 
 dev-all: ## Start API + Celery worker+beat together (requires: make up first)
