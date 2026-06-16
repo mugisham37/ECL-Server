@@ -10,7 +10,7 @@ from typing import Any
 from zoneinfo import ZoneInfo
 
 import pandas as pd
-from sqlalchemy import and_, func, or_, select
+from sqlalchemy import and_, delete, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.enums import UserRole
@@ -50,6 +50,15 @@ from decimal import Decimal as _Decimal
 from app.core.logging import get_logger
 
 log = get_logger("runs.service")
+
+_ACTIVE_RUN_STATUSES = frozenset(
+    {
+        RunStatus.QUEUED.value,
+        RunStatus.PD_RUNNING.value,
+        RunStatus.LGD_RUNNING.value,
+        RunStatus.EAD_RUNNING.value,
+    }
+)
 
 _COLLATERAL_DEFAULTS: dict[str, dict] = {
     "real estate":          {"haircut": 15.0, "time_to_realize": 18},
@@ -324,6 +333,42 @@ async def _get_run(db: AsyncSession, tenant_id: str, run_id: str) -> Run:
     return run
 
 
+async def _get_run_for_update(db: AsyncSession, tenant_id: str, run_id: str) -> Run:
+    result = await db.execute(
+        select(Run)
+        .where(
+            Run.id == run_id,
+            Run.tenant_id == tenant_id,
+            Run.deleted_at.is_(None),
+        )
+        .with_for_update()
+    )
+    run = result.scalar_one_or_none()
+    if not run:
+        raise ECLException("RESOURCE_NOT_FOUND", "Run not found.", 404)
+    return run
+
+
+async def _clear_run_results(db: AsyncSession, run_id: str, tenant_id: str) -> None:
+    from app.modules.results.models import EadResult, LgdResult, OutputArtifact, PdResult
+
+    await db.execute(
+        delete(PdResult).where(PdResult.run_id == run_id, PdResult.tenant_id == tenant_id)
+    )
+    await db.execute(
+        delete(LgdResult).where(LgdResult.run_id == run_id, LgdResult.tenant_id == tenant_id)
+    )
+    await db.execute(
+        delete(EadResult).where(EadResult.run_id == run_id, EadResult.tenant_id == tenant_id)
+    )
+    await db.execute(
+        delete(OutputArtifact).where(
+            OutputArtifact.run_id == run_id,
+            OutputArtifact.tenant_id == tenant_id,
+        )
+    )
+
+
 async def _get_user(db: AsyncSession, user_id: str) -> User:
     result = await db.execute(select(User).where(User.id == user_id))
     user = result.scalar_one_or_none()
@@ -427,6 +472,50 @@ def _issues_to_out(tagged_issues: list[tuple[str, ValidationIssue]]) -> list[Val
         )
         for kind, issue in tagged_issues
     ]
+
+
+def _validation_summaries(
+    overall_status: str,
+    all_issues: list[tuple[str, ValidationIssue]],
+    detected: list[str],
+) -> tuple[str, str, int, int]:
+    blocking_count = sum(1 for _, issue in all_issues if issue.level == "block")
+    warning_count = sum(1 for _, issue in all_issues if issue.level == "warn")
+
+    if overall_status == ValidationStatus.OK.value:
+        segment_note = (
+            f"{len(detected)} segment(s) detected"
+            if detected
+            else "No segments detected yet"
+        )
+        return (
+            "All checks passed",
+            f"{segment_note} · files are ready for computation",
+            blocking_count,
+            warning_count,
+        )
+
+    if overall_status == "blocking":
+        return (
+            "Validation errors found",
+            (
+                f"{blocking_count} blocking error(s) across your uploads"
+                + (f" · {warning_count} warning(s)" if warning_count else "")
+                + " — fix and re-upload to continue"
+            ),
+            blocking_count,
+            warning_count,
+        )
+
+    return (
+        "Validation warnings found",
+        (
+            f"{warning_count} warning(s) to review"
+            + (f" · {len(detected)} segment(s) detected" if detected else "")
+        ),
+        blocking_count,
+        warning_count,
+    )
 
 
 def _extract_segments(dfs: list[pd.DataFrame]) -> set[str]:
@@ -598,6 +687,7 @@ async def create_run(
     ip: str | None = None,
     user_agent: str | None = None,
 ) -> RunDetailOut:
+    log.info("run_create_started", tenant_id=tenant_id, user_id=user_id, name=req.name.strip(), engine_version=ENGINE_VERSION)
     await _get_tenant(db, tenant_id)
     user = await _get_user(db, user_id)
     run = Run(
@@ -611,6 +701,7 @@ async def create_run(
     )
     db.add(run)
     await db.flush()
+    log.info("run_draft_created", run_id=run.id, tenant_id=tenant_id, user_id=user_id, status=RunStatus.DRAFT.value)
     await log_event(
         db,
         AuditEvent.RUN_CREATED.value,
@@ -658,6 +749,7 @@ async def upload_file(
     ip: str | None = None,
     user_agent: str | None = None,
 ) -> UploadOut:
+    log.info("upload_file_started", run_id=run_id, tenant_id=tenant_id, kind=kind, filename=filename)
     run = await _get_run(db, tenant_id, run_id)
     if run.status not in (RunStatus.DRAFT.value, RunStatus.FAILED.value):
         raise ECLException(
@@ -673,16 +765,21 @@ async def upload_file(
     )
     for old in existing.scalars().all():
         if kind != UploadKind.PD.value:
+            log.info("replacing_existing_upload", run_id=run_id, kind=kind, old_filename=old.original_filename)
             await delete_object(old.storage_path)
             await db.delete(old)
 
     safe_name = filename.replace("/", "_").replace("\\", "_")
     storage_path = build_storage_path(tenant_id, run_id, kind.lower(), safe_name)
+    log.info("upload_streaming_to_storage", run_id=run_id, kind=kind, storage_path=storage_path)
     sha256, size = await upload_stream(storage_path, file_obj, content_type)
+    log.info("upload_stored", run_id=run_id, kind=kind, size_bytes=size, sha256_prefix=sha256[:8])
 
     content = await download_bytes(storage_path)
     _assert_upload_safe(content, content_type)
+    log.info("upload_parsing_excel", run_id=run_id, kind=kind, filename=filename)
     sheets, sheet_count, row_count = _parse_excel(content)
+    log.info("upload_parsed", run_id=run_id, kind=kind, sheets=sheet_count, rows=row_count)
 
     if row_count is not None and row_count > 1_000_000:
         existing_warnings = run.run_warnings or []
@@ -765,11 +862,13 @@ async def validate_files(
     ip: str | None = None,
     user_agent: str | None = None,
 ) -> ValidationResultOut:
+    log.info("validate_files_started", run_id=run_id, tenant_id=tenant_id, user_id=user_id)
     await _get_run(db, tenant_id, run_id)
     uploads = await _load_uploads(db, run_id)
     if not uploads:
         raise ECLException("NO_UPLOADS", "No files uploaded for this run.", 400)
 
+    log.info("validate_files_loading_uploads", run_id=run_id, upload_count=len(uploads), kinds=[u.kind for u in uploads])
     await log_event(
         db,
         AuditEvent.VALIDATION_TRIGGERED.value,
@@ -785,10 +884,12 @@ async def validate_files(
     prescan_collateral: set[str] = set()
 
     for upload in uploads:
+        log.info("validate_downloading_upload", run_id=run_id, kind=upload.kind, filename=upload.original_filename)
         content = await download_bytes(upload.storage_path)
         sheets, _, _ = _parse_excel(content)
         combined = _combine_sheets(sheets)
         upload_data[upload.id] = (sheets, combined)
+        log.info("validate_upload_loaded", run_id=run_id, kind=upload.kind, sheets=len(sheets), rows=len(combined))
 
         if upload.kind in (UploadKind.PD.value, UploadKind.EAD.value):
             if "SEGMENT" in combined.columns:
@@ -798,23 +899,29 @@ async def validate_files(
         elif upload.kind == UploadKind.LGD.value:
             prescan_collateral.update(_extract_lgd_collateral_columns(combined))
 
+    log.info("validate_prescan_complete", run_id=run_id, segments_found=sorted(prescan_segments), collateral_found=sorted(prescan_collateral))
+
     # Auto-provision any missing segments and collateral types
     allowed_segments = await _allowed_segments(db, tenant_id)
     allowed_collateral = await _allowed_collateral(db, tenant_id)
 
     new_segments = prescan_segments - allowed_segments
     if new_segments:
+        log.info("validate_auto_provisioning_segments", run_id=run_id, new_segments=sorted(new_segments))
         try:
             await _auto_provision_segments(db, tenant_id, user_id, new_segments)
             allowed_segments |= new_segments
+            log.info("validate_segments_provisioned", run_id=run_id, count=len(new_segments))
         except Exception as exc:
             log.warning("auto_provision_segments_failed", tenant_id=tenant_id, error=str(exc))
 
     new_collateral = prescan_collateral - allowed_collateral
     if new_collateral:
+        log.info("validate_auto_provisioning_collateral", run_id=run_id, new_collateral=sorted(new_collateral))
         try:
             await _auto_provision_collateral(db, tenant_id, user_id, new_collateral)
             allowed_collateral |= new_collateral
+            log.info("validate_collateral_provisioned", run_id=run_id, count=len(new_collateral))
         except Exception as exc:
             log.warning("auto_provision_collateral_failed", tenant_id=tenant_id, error=str(exc))
 
@@ -862,6 +969,16 @@ async def validate_files(
             issues, warnings_accepted=upload_warnings_accepted
         )
         all_issues.extend((upload.kind, i) for i in issues)
+        log.info(
+            "validate_file_result",
+            run_id=run_id,
+            kind=upload.kind,
+            filename=upload.original_filename,
+            status=upload.validation_status,
+            issue_count=len(issues),
+            blocking=sum(1 for i in issues if i.level == "block"),
+            warnings=sum(1 for i in issues if i.level == "warn"),
+        )
 
     detected = sorted(_extract_segments(segment_dfs))
     overall_status = ValidationStatus.OK.value
@@ -877,6 +994,16 @@ async def validate_files(
             overall_status = ValidationStatus.WARN.value
 
     await db.flush()
+    log.info(
+        "validate_files_complete",
+        run_id=run_id,
+        overall_status=overall_status,
+        total_issues=len(all_issues),
+        total_blocking=sum(1 for _, i in all_issues if i.level == "block"),
+        total_warnings=sum(1 for _, i in all_issues if i.level == "warn"),
+        detected_segments=detected,
+        segment_count=len(detected),
+    )
     await log_event(
         db,
         AuditEvent.VALIDATION_COMPLETED.value,
@@ -889,10 +1016,19 @@ async def validate_files(
             "status": overall_status,
         },
     )
+    summary, sub_summary, blocking_count, warning_count = _validation_summaries(
+        overall_status,
+        all_issues,
+        detected,
+    )
     return ValidationResultOut(
         status=overall_status,
+        summary=summary,
+        sub_summary=sub_summary,
         issues=_issues_to_out(all_issues),
         detected_segments=detected,
+        blocking_count=blocking_count,
+        warning_count=warning_count,
     )
 
 
@@ -905,12 +1041,18 @@ async def execute_run(
     ip: str | None = None,
     user_agent: str | None = None,
 ) -> ExecuteRunOut:
-    run = await _get_run(db, tenant_id, run_id)
+    log.info("execute_run_started", run_id=run_id, tenant_id=tenant_id, user_id=user_id)
+    run = await _get_run_for_update(db, tenant_id, run_id)
+    log.info("execute_run_current_status", run_id=run_id, status=run.status, engine_version=run.engine_version)
+    if run.status in _ACTIVE_RUN_STATUSES:
+        log.info("execute_run_already_active", run_id=run_id, status=run.status)
+        return ExecuteRunOut(run_id=run_id, status=run.status, dispatch_task=False)
     if run.status not in (RunStatus.DRAFT.value, RunStatus.FAILED.value):
         raise ECLException("RUN_NOT_EXECUTABLE", "Run is not in an executable state.", 409)
 
     uploads = await _load_uploads(db, run_id)
     kinds = {u.kind for u in uploads}
+    log.info("execute_run_checking_uploads", run_id=run_id, present_kinds=sorted(kinds), upload_count=len(uploads))
     required = {UploadKind.PD.value, UploadKind.LGD.value, UploadKind.EAD.value}
     if not required.issubset(kinds):
         missing = ", ".join(sorted(required - kinds))
@@ -937,6 +1079,9 @@ async def execute_run(
                 400,
             )
 
+    if run.status == RunStatus.FAILED.value:
+        await _clear_run_results(db, run_id, tenant_id)
+
     run.status = RunStatus.QUEUED.value
     run.engine_progress = _default_engine_progress()
     run.failure_stage = None
@@ -944,7 +1089,16 @@ async def execute_run(
     run.failure_ref = None
     run.started_at = None
     run.finished_at = None
+    run.total_ecl = None
+    run.total_outstanding = None
+    run.coverage_ratio = None
     await db.flush()
+    log.info(
+        "run_status_set_queued",
+        run_id=run_id,
+        engine_version=run.engine_version,
+        uploads=[{"kind": u.kind, "filename": u.original_filename, "rows": u.row_count} for u in uploads],
+    )
 
     await log_event(
         db,
@@ -957,7 +1111,7 @@ async def execute_run(
             "description": f"Engine {run.engine_version}",
         },
     )
-    return ExecuteRunOut(run_id=run_id, status="queued")
+    return ExecuteRunOut(run_id=run_id, status="queued", dispatch_task=True)
 
 
 async def get_run(

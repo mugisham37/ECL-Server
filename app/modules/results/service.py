@@ -99,20 +99,23 @@ async def _latest_completed_run(
     if run_id:
         if user is not None:
             run = await assert_run_visible(db, user, tenant_id, membership, run_id)
-            if run.status != RunStatus.COMPLETE.value:
-                raise ECLException("RESOURCE_NOT_FOUND", "Completed run not found.", 404)
-            return run
-        result = await db.execute(
-            select(Run).where(
-                Run.id == run_id,
-                Run.tenant_id == tenant_id,
-                Run.status == RunStatus.COMPLETE.value,
-                Run.deleted_at.is_(None),
+        else:
+            result = await db.execute(
+                select(Run).where(
+                    Run.id == run_id,
+                    Run.tenant_id == tenant_id,
+                    Run.deleted_at.is_(None),
+                )
             )
-        )
-        run = result.scalar_one_or_none()
+            run = result.scalar_one_or_none()
         if not run:
-            raise ECLException("RESOURCE_NOT_FOUND", "Completed run not found.", 404)
+            raise ECLException("RESOURCE_NOT_FOUND", "Run not found.", 404)
+        if run.status != RunStatus.COMPLETE.value:
+            raise ECLException(
+                "RUN_NOT_COMPLETE",
+                f"This run has not finished computing yet (current status: {run.status}).",
+                409,
+            )
         return run
 
     if user is not None:

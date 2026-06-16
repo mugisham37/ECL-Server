@@ -42,8 +42,12 @@ class ValidationIssueOut(BaseModel):
 
 class ValidationResultOut(BaseModel):
     status: Literal["ok", "warn", "blocking"]
+    summary: str
+    sub_summary: str
     issues: list[ValidationIssueOut]
     detected_segments: list[str]
+    blocking_count: int = 0
+    warning_count: int = 0
 
 
 class ValidateRunRequest(BaseModel):
@@ -148,6 +152,7 @@ class RunDetailOut(RunListItemOut):
 class ExecuteRunOut(BaseModel):
     run_id: str
     status: str
+    dispatch_task: bool = True
 
 
 class PresignedDownloadOut(BaseModel):

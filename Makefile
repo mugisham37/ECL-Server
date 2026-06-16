@@ -1,5 +1,5 @@
 .PHONY: help up down logs shell migrate migrate-down test test-cov lint type-check \
-        format security-scan generate-keys seed-admin seed-dev clean worker worker-beat dev-all
+        format security-scan generate-keys seed-admin seed-dev clean clean-db worker worker-beat dev dev-all
 
 GIT_COMMIT = git -c user.email=dev@eclplatform.com -c user.name="ECL Developer" commit
 
@@ -64,19 +64,10 @@ worker: ## Start Celery worker — REQUIRED for email delivery AND ECL compute
 worker-beat: ## Start Celery worker + beat scheduler (periodic cleanup tasks)
 	celery -A app.tasks.celery_app worker --beat --loglevel=info --concurrency=4
 
-dev: ## Show commands to start all dev services (run each in a separate terminal)
-	@echo ""
-	@echo "  Terminal 1 (infrastructure):  make up"
-	@echo "  Terminal 2 (api):             uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload"
-	@echo "  Terminal 3 (worker):          make worker"
-	@echo ""
-	@echo "  The Celery worker is REQUIRED for:"
-	@echo "    - Email delivery (signup, invites, password reset)"
-	@echo "    - ECL compute (PD / LGD / EAD / ECL engines)"
-	@echo "  Without it: emails are not sent AND compute stays stuck at 0%."
-	@echo ""
+dev: ## ONE COMMAND: start Docker services, wait for health, migrate, then run API + worker
+	@bash scripts/dev.sh
 
-dev-all: ## Start API + Celery worker+beat together (requires: make up first)
+dev-all: ## Start API + Celery worker+beat (skips Docker — use when infrastructure is already up)
 	honcho start
 
 dev-check: ## Verify Redis is reachable on the configured Celery broker port
@@ -85,3 +76,9 @@ dev-check: ## Verify Redis is reachable on the configured Celery broker port
 clean: ## Remove caches
 	find . -type f -name "*.pyc" -delete
 	find . -type d -name "__pycache__" -exec rm -rf {} + 2>/dev/null || true
+
+clean-db: ## Truncate all application data (keeps schema); also flushes Redis
+	docker compose -f docker/docker-compose.yml up -d postgres redis
+	.venv/bin/python scripts/clean_db.py --yes
+	docker compose -f docker/docker-compose.yml exec -T redis redis-cli FLUSHDB
+	@echo "Database and Redis cleared. Re-seed with: make seed-dev seed-admin"

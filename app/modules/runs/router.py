@@ -1,3 +1,4 @@
+import asyncio
 from pathlib import Path
 
 from celery import chord, group
@@ -49,6 +50,7 @@ async def create_run_endpoint(
     user: CurrentUser,
     _a: TenantMembership = Depends(require_tenant_analyst_or_admin),
 ) -> RunResponse:
+    _log.info("run_create_requested", tenant_id=tenant_id, user_id=user.id, name=body.name)
     data = await service.create_run(
         db,
         tenant_id,
@@ -57,6 +59,7 @@ async def create_run_endpoint(
         ip=get_client_ip(request.headers.get("X-Forwarded-For")),
         user_agent=get_user_agent(request.headers.get("User-Agent")),
     )
+    _log.info("run_created", run_id=data.fullId, tenant_id=tenant_id, user_id=user.id)
     return RunResponse(data=data)
 
 
@@ -85,6 +88,14 @@ async def upload_file_endpoint(
     file: UploadFile = File(...),
     _a: TenantMembership = Depends(require_tenant_analyst_or_admin),
 ) -> UploadResponse:
+    _log.info(
+        "file_upload_received",
+        run_id=run_id,
+        tenant_id=tenant_id,
+        kind=kind.upper(),
+        filename=file.filename,
+        content_type=file.content_type,
+    )
     data = await service.upload_file(
         db,
         tenant_id,
@@ -96,6 +107,16 @@ async def upload_file_endpoint(
         content_type=file.content_type or "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         ip=get_client_ip(request.headers.get("X-Forwarded-For")),
         user_agent=get_user_agent(request.headers.get("User-Agent")),
+    )
+    _log.info(
+        "file_upload_complete",
+        run_id=run_id,
+        kind=kind.upper(),
+        filename=data.filename,
+        size_bytes=data.size_bytes,
+        sha256_prefix=data.sha256[:8],
+        sheets=data.sheet_count,
+        rows=data.row_count,
     )
     return UploadResponse(data=data)
 
@@ -122,6 +143,13 @@ async def validate_files_endpoint(
     user: CurrentUser,
     _a: TenantMembership = Depends(require_tenant_analyst_or_admin),
 ) -> ValidationResponse:
+    _log.info(
+        "validation_requested",
+        run_id=run_id,
+        tenant_id=tenant_id,
+        user_id=user.id,
+        accepted_warning_count=len(body.accepted_warning_ids),
+    )
     data = await service.validate_files(
         db,
         tenant_id,
@@ -130,6 +158,13 @@ async def validate_files_endpoint(
         body,
         ip=get_client_ip(request.headers.get("X-Forwarded-For")),
         user_agent=get_user_agent(request.headers.get("User-Agent")),
+    )
+    _log.info(
+        "validation_complete",
+        run_id=run_id,
+        status=data.status,
+        issue_count=len(data.issues),
+        detected_segments=data.detected_segments,
     )
     return ValidationResponse(data=data)
 
@@ -146,6 +181,7 @@ async def execute_run_endpoint(
     user: CurrentUser,
     _a: TenantMembership = Depends(require_tenant_analyst_or_admin),
 ) -> ExecuteRunResponse:
+    _log.info("execute_run_requested", run_id=run_id, tenant_id=tenant_id, user_id=user.id)
     data = await service.execute_run(
         db,
         tenant_id,
@@ -155,16 +191,27 @@ async def execute_run_endpoint(
         user_agent=get_user_agent(request.headers.get("User-Agent")),
     )
     await db.commit()
-    try:
-        chord(group(pd_task.s(run_id), lgd_task.s(run_id)))(ead_ecl_task.s(run_id))
-        _log.info("compute_chord_dispatched", run_id=run_id)
-    except Exception as exc:
-        _log.error("compute_chord_dispatch_failed", run_id=run_id, exc_info=exc)
-        raise ECLException(
-            "COMPUTE_DISPATCH_FAILED",
-            "Failed to enqueue the compute job. Check that the message broker (Redis) is running.",
-            503,
-        ) from exc
+    if data.dispatch_task:
+        _log.info("run_queued_dispatching_to_celery", run_id=run_id)
+        try:
+            await asyncio.to_thread(
+                lambda: chord(group(pd_task.s(run_id), lgd_task.s(run_id)))(ead_ecl_task.s(run_id))
+            )
+            _log.info(
+                "compute_chord_dispatched",
+                run_id=run_id,
+                tasks=["pd_task", "lgd_task", "ead_ecl_task"],
+                broker="redis",
+            )
+        except Exception as exc:
+            _log.error("compute_chord_dispatch_failed", run_id=run_id, exc_info=exc)
+            raise ECLException(
+                "COMPUTE_DISPATCH_FAILED",
+                "Failed to enqueue the compute job. Check that the message broker (Redis) is running.",
+                503,
+            ) from exc
+    else:
+        _log.info("execute_run_idempotent_skip_dispatch", run_id=run_id, status=data.status)
     return ExecuteRunResponse(data=data)
 
 
