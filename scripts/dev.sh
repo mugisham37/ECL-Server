@@ -63,4 +63,4 @@ fi
 echo ""
 log "All systems go. Starting API + Celery worker..."
 echo ""
-exec .venv/bin/honcho start
+exec .venv/bin/honcho start -f Procfile.dev

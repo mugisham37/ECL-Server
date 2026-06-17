@@ -68,7 +68,7 @@ dev: ## ONE COMMAND: start Docker services, wait for health, migrate, then run A
 	@bash scripts/dev.sh
 
 dev-all: ## Start API + Celery worker+beat (skips Docker — use when infrastructure is already up)
-	honcho start
+	honcho start -f Procfile.dev
 
 dev-check: ## Verify Redis is reachable on the configured Celery broker port
 	@.venv/bin/python -c "from app.config import get_settings; import redis; s=get_settings(); r=redis.from_url(s.redis_celery_url); r.ping(); print('Redis OK:', s.redis_celery_url)"

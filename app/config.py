@@ -1,8 +1,13 @@
 from functools import lru_cache
 from typing import Literal
 
-from pydantic import Field, field_validator
+from pydantic import Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+_DEV_DEFAULT_CSRF_SECRET = "changeme-csrf-secret-32-chars-min"
+_DEV_DEFAULT_IP_HASH_SALT = "ecl-ip-hash-salt"
+_DEV_DEFAULT_STORAGE_ACCESS_KEY = "minioadmin"
+_DEV_DEFAULT_STORAGE_SECRET_KEY = "minioadmin"
 
 
 class Settings(BaseSettings):
@@ -80,16 +85,16 @@ class Settings(BaseSettings):
     trust_proxy_headers: bool = False
     trusted_proxy_count: int = 1
 
-    csrf_secret: str = "changeme-csrf-secret-32-chars-min"
+    csrf_secret: str = _DEV_DEFAULT_CSRF_SECRET
 
     totp_issuer_name: str = "ECL Platform"
     totp_encryption_key: str = ""
 
-    ip_hash_salt: str = "ecl-ip-hash-salt"
+    ip_hash_salt: str = _DEV_DEFAULT_IP_HASH_SALT
 
     storage_endpoint_url: str = "http://localhost:9000"
-    storage_access_key: str = "minioadmin"
-    storage_secret_key: str = "minioadmin"
+    storage_access_key: str = _DEV_DEFAULT_STORAGE_ACCESS_KEY
+    storage_secret_key: str = _DEV_DEFAULT_STORAGE_SECRET_KEY
     storage_bucket_name: str = "ecl-platform"
     storage_region: str = "us-east-1"
     max_upload_bytes: int = 52_428_800  # 50 MB
@@ -113,6 +118,47 @@ class Settings(BaseSettings):
     @property
     def is_production(self) -> bool:
         return self.app_env == "production"
+
+    @model_validator(mode="after")
+    def _validate_production_config(self) -> "Settings":
+        if self.app_env != "production":
+            return self
+
+        insecure_defaults = {
+            "csrf_secret": _DEV_DEFAULT_CSRF_SECRET,
+            "ip_hash_salt": _DEV_DEFAULT_IP_HASH_SALT,
+            "storage_access_key": _DEV_DEFAULT_STORAGE_ACCESS_KEY,
+            "storage_secret_key": _DEV_DEFAULT_STORAGE_SECRET_KEY,
+        }
+        localhost_fields = {
+            "redis_url": self.redis_url,
+            "redis_celery_url": self.redis_celery_url,
+            "cors_origins": self.cors_origins,
+            "frontend_url": self.frontend_url,
+            "smtp_host": self.smtp_host,
+            "storage_endpoint_url": self.storage_endpoint_url,
+        }
+
+        errors: list[str] = []
+        for field_name, dev_value in insecure_defaults.items():
+            if getattr(self, field_name) == dev_value:
+                errors.append(
+                    f"{field_name} is still set to its insecure development default; "
+                    "set a real value via the environment in production."
+                )
+        for field_name, value in localhost_fields.items():
+            if "localhost" in value or "127.0.0.1" in value:
+                errors.append(
+                    f"{field_name} points at localhost ({value!r}); "
+                    "set the real production value via the environment."
+                )
+
+        if errors:
+            raise ValueError(
+                "Insecure/development configuration detected with app_env=production:\n  - "
+                + "\n  - ".join(errors)
+            )
+        return self
 
 
 @lru_cache
