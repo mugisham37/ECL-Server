@@ -155,6 +155,7 @@ def create_app() -> FastAPI:
                 re.compile(r"^/api/v1/settings/"),
                 re.compile(r"^/api/v1/invites/"),
                 re.compile(r"^/api/v1/onboarding/"),
+                re.compile(r"^/api/v1/demo"),
                 re.compile(r"^/docs"),
                 re.compile(r"^/openapi"),
                 re.compile(r"^/metrics"),

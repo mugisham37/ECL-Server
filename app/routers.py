@@ -4,6 +4,7 @@ api_router = APIRouter()
 
 # Module routers registered as they are implemented
 def _register_routers() -> None:
+    from app.modules.demo.router import router as demo_router
     from app.modules.audit.router import router as audit_router
     from app.modules.auth.router import router as auth_router
     from app.modules.collateral.router import router as collateral_router
@@ -17,6 +18,7 @@ def _register_routers() -> None:
     from app.modules.settings.router import router as settings_router
     from app.modules.tenants.router import router as tenants_router
 
+    api_router.include_router(demo_router, prefix="/api/v1")
     api_router.include_router(auth_router, prefix="/api/v1")
     api_router.include_router(invites_router, prefix="/api/v1")
     api_router.include_router(sessions_router, prefix="/api/v1")

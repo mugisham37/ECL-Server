@@ -57,6 +57,7 @@ class Settings(BaseSettings):
     smtp_from_email: str = "noreply@eclplatform.com"
     smtp_from_name: str = "ECL Platform"
     smtp_tls: bool = True
+    demo_notification_email: str = ""  # if empty, falls back to smtp_from_email
 
     frontend_url: str = "http://localhost:3000"
 

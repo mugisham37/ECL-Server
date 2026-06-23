@@ -1,0 +1,30 @@
+{% extends "base_email.html" %}
+{% block content %}
+<h2 style="margin-top:0">New demo request</h2>
+<table style="width:100%;border-collapse:collapse;font-size:14px">
+  <tr>
+    <td style="padding:8px 0;color:#555;width:140px"><strong>Name</strong></td>
+    <td style="padding:8px 0">{{ name }}</td>
+  </tr>
+  <tr style="background:#f9f9f9">
+    <td style="padding:8px 0;color:#555"><strong>Company</strong></td>
+    <td style="padding:8px 0">{{ company }}</td>
+  </tr>
+  <tr>
+    <td style="padding:8px 0;color:#555"><strong>Work email</strong></td>
+    <td style="padding:8px 0"><a href="mailto:{{ email }}">{{ email }}</a></td>
+  </tr>
+  <tr style="background:#f9f9f9">
+    <td style="padding:8px 0;color:#555"><strong>Role</strong></td>
+    <td style="padding:8px 0">{{ role }}</td>
+  </tr>
+  <tr>
+    <td style="padding:8px 0;color:#555"><strong>Portfolio size</strong></td>
+    <td style="padding:8px 0">{{ portfolio_size }}</td>
+  </tr>
+  <tr style="background:#f9f9f9">
+    <td style="padding:8px 0;color:#555;vertical-align:top"><strong>Message</strong></td>
+    <td style="padding:8px 0">{{ message }}</td>
+  </tr>
+</table>
+{% endblock %}
