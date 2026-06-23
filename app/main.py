@@ -56,14 +56,19 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
 
     smtp_status: str = "ok"
     if settings.smtp_username:
+        import asyncio
         import smtplib
 
+        def _check_smtp() -> None:
+            with smtplib.SMTP(settings.smtp_host, settings.smtp_port, timeout=5) as s:
+                s.ehlo()
+                s.starttls()
+                s.ehlo()
+                s.login(settings.smtp_username, settings.smtp_password)
+
         try:
-            with smtplib.SMTP(settings.smtp_host, settings.smtp_port, timeout=5) as s_smtp:
-                s_smtp.ehlo()
-                s_smtp.starttls()
-                s_smtp.ehlo()
-                s_smtp.login(settings.smtp_username, settings.smtp_password)
+            loop = asyncio.get_event_loop()
+            await loop.run_in_executor(None, _check_smtp)
         except Exception as exc:
             smtp_status = f"error: {exc}"
             log.error(
