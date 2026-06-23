@@ -583,6 +583,7 @@ async def get_dashboard(
     runs = [
         RunSummaryOut(
             id=short_ulid(run.id),
+            fullId=run.id,
             period=run.reporting_period or run.name,
             byInitials=user_initials(user.name),
             byName=user.name,

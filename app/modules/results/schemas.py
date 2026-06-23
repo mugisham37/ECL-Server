@@ -115,6 +115,7 @@ class TrendPointOut(BaseModel):
 
 class RunSummaryOut(BaseModel):
     id: str
+    fullId: str
     period: str
     byInitials: str
     byName: str
