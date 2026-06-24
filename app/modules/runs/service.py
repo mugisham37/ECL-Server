@@ -1229,6 +1229,22 @@ async def execute_run(
     return ExecuteRunOut(run_id=run_id, status="queued", dispatch_task=True)
 
 
+async def revert_run_after_dispatch_failure(
+    db: AsyncSession,
+    tenant_id: str,
+    run_id: str,
+) -> None:
+    """Reset a run left in queued state when Celery dispatch fails."""
+    run = await _get_run_for_update(db, tenant_id, run_id)
+    if run.status != RunStatus.QUEUED.value:
+        return
+    run.status = RunStatus.DRAFT.value
+    run.engine_progress = _default_engine_progress()
+    run.started_at = None
+    await db.flush()
+    log.warning("run_reverted_after_dispatch_failure", run_id=run_id, tenant_id=tenant_id)
+
+
 async def get_run(
     db: AsyncSession,
     tenant_id: str,
