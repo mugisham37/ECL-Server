@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import io
 import zipfile
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any
 from zoneinfo import ZoneInfo
@@ -247,6 +248,14 @@ def _issue_id(issue: ValidationIssue) -> str:
     return digest[:12]
 
 
+@dataclass(frozen=True, slots=True)
+class TaggedValidationIssue:
+    kind: str
+    issue: ValidationIssue
+    upload_id: str | None = None
+    filename: str | None = None
+
+
 def _format_dt(dt: datetime | None, tz_name: str = "UTC") -> str:
     if dt is None:
         return ""
@@ -460,27 +469,30 @@ def _validation_status_from_issues(
     return ValidationStatus.OK.value
 
 
-def _issues_to_out(tagged_issues: list[tuple[str, ValidationIssue]]) -> list[ValidationIssueOut]:
+def _issues_to_out(tagged_issues: list[TaggedValidationIssue]) -> list[ValidationIssueOut]:
     return [
         ValidationIssueOut(
-            id=_issue_id(issue),
-            kind=kind,  # type: ignore[arg-type]
-            level=issue.level,
-            title=issue.title,
-            location=issue.location,
-            fix=issue.fix,
+            id=_issue_id(tagged.issue),
+            kind=tagged.kind,  # type: ignore[arg-type]
+            level=tagged.issue.level,
+            title=tagged.issue.title,
+            location=tagged.issue.location,
+            fix=tagged.issue.fix,
+            upload_id=tagged.upload_id,
+            filename=tagged.filename,
+            category=tagged.issue.category,
         )
-        for kind, issue in tagged_issues
+        for tagged in tagged_issues
     ]
 
 
 def _validation_summaries(
     overall_status: str,
-    all_issues: list[tuple[str, ValidationIssue]],
+    all_issues: list[TaggedValidationIssue],
     detected: list[str],
 ) -> tuple[str, str, int, int]:
-    blocking_count = sum(1 for _, issue in all_issues if issue.level == "block")
-    warning_count = sum(1 for _, issue in all_issues if issue.level == "warn")
+    blocking_count = sum(1 for tagged in all_issues if tagged.issue.level == "block")
+    warning_count = sum(1 for tagged in all_issues if tagged.issue.level == "warn")
 
     if overall_status == ValidationStatus.OK.value:
         segment_note = (
@@ -968,7 +980,15 @@ async def validate_files(
         upload.validation_status = _validation_status_from_issues(
             issues, warnings_accepted=upload_warnings_accepted
         )
-        all_issues.extend((upload.kind, i) for i in issues)
+        all_issues.extend(
+            TaggedValidationIssue(
+                kind=upload.kind,
+                issue=issue,
+                upload_id=upload.id,
+                filename=upload.original_filename,
+            )
+            for issue in issues
+        )
         log.info(
             "validate_file_result",
             run_id=run_id,
@@ -999,8 +1019,8 @@ async def validate_files(
         run_id=run_id,
         overall_status=overall_status,
         total_issues=len(all_issues),
-        total_blocking=sum(1 for _, i in all_issues if i.level == "block"),
-        total_warnings=sum(1 for _, i in all_issues if i.level == "warn"),
+        total_blocking=sum(1 for tagged in all_issues if tagged.issue.level == "block"),
+        total_warnings=sum(1 for tagged in all_issues if tagged.issue.level == "warn"),
         detected_segments=detected,
         segment_count=len(detected),
     )
