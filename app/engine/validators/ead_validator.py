@@ -59,7 +59,7 @@ def validate_ead(
     required.append(staging_col if staging_col is not None else "Staging")
     required.append(eir_col if eir_col is not None else "Effective Interest Rate")
 
-    check_required_columns(df, required, sheet_name=sheet_name, result=result)
+    check_required_columns(df, required, sheet_name=sheet_name, result=result, template_kind="EAD")
     if result.remaining_capacity() == 0:
         return result
 
