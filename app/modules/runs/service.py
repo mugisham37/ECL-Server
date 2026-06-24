@@ -36,7 +36,8 @@ from app.engine.format_utils import (
     short_ulid,
 )
 from app.engine.validators import validate_ead, validate_lgd, validate_pd
-from app.engine.validators.base import ValidationIssue
+from app.engine.validators.base import MAX_ISSUES, ValidationIssue
+from app.engine.validators.cross_file_validator import CrossFileData, validate_cross_files
 from app.modules.audit.models import AuditEvent
 from app.modules.audit.service import log_event
 from app.modules.auth.models import User
@@ -958,19 +959,30 @@ async def validate_files(
 
     accepted_ids = set(req.accepted_warning_ids)
 
-    all_issues: list[tuple[str, ValidationIssue]] = []
+    all_issues: list[TaggedValidationIssue] = []
     segment_dfs: list[pd.DataFrame] = []
+    issue_cap_hit = False
+    pd_uploads: list[Upload] = []
+    lgd_upload: Upload | None = None
+    ead_upload: Upload | None = None
+    pd_combined_frames: list[pd.DataFrame] = []
 
     for upload in uploads:
         sheets, combined = upload_data[upload.id]
         issues: list[ValidationIssue] = []
+        per_file_cap_hit = False
 
         if upload.kind == UploadKind.PD.value:
+            pd_uploads.append(upload)
             for sheet_name, df in sheets.items():
                 result = validate_pd(df, sheet_name=sheet_name, allowed_segments=allowed_segments)
                 issues.extend(result.issues)
+                if result.issue_cap_reached:
+                    per_file_cap_hit = True
             segment_dfs.append(combined)
+            pd_combined_frames.append(combined)
         elif upload.kind == UploadKind.LGD.value:
+            lgd_upload = upload
             for sheet_name, df in sheets.items():
                 result = validate_lgd(
                     df,
@@ -978,11 +990,19 @@ async def validate_files(
                     allowed_collateral_types=allowed_collateral,
                 )
                 issues.extend(result.issues)
+                if result.issue_cap_reached:
+                    per_file_cap_hit = True
         elif upload.kind == UploadKind.EAD.value:
+            ead_upload = upload
             for sheet_name, df in sheets.items():
                 result = validate_ead(df, sheet_name=sheet_name, allowed_segments=allowed_segments)
                 issues.extend(result.issues)
+                if result.issue_cap_reached:
+                    per_file_cap_hit = True
             segment_dfs.append(combined)
+
+        if per_file_cap_hit:
+            issue_cap_hit = True
 
         upload_warnings_accepted = upload.warnings_accepted
         if req.accepted_warning_ids:
@@ -1019,15 +1039,71 @@ async def validate_files(
             warnings=sum(1 for i in issues if i.level == "warn"),
         )
 
+    if ead_upload and lgd_upload:
+        ead_combined = upload_data[ead_upload.id][1]
+        lgd_combined = upload_data[lgd_upload.id][1]
+        pd_combined = (
+            pd.concat(pd_combined_frames, ignore_index=True)
+            if pd_combined_frames
+            else pd.DataFrame()
+        )
+        cross_issues = validate_cross_files(
+            CrossFileData(
+                pd_combined=pd_combined,
+                lgd_combined=lgd_combined,
+                ead_combined=ead_combined,
+                ead_upload_id=ead_upload.id,
+                ead_filename=ead_upload.original_filename,
+                lgd_upload_id=lgd_upload.id,
+                lgd_filename=lgd_upload.original_filename,
+                pd_upload_id=pd_uploads[0].id if pd_uploads else None,
+                pd_filename=pd_uploads[0].original_filename if pd_uploads else None,
+            )
+        )
+        for issue in cross_issues:
+            target_upload = ead_upload if "EAD" in issue.title or "EC-08" in issue.title else lgd_upload
+            if "EIR" in issue.title:
+                target_upload = ead_upload
+            all_issues.append(
+                TaggedValidationIssue(
+                    kind=target_upload.kind,
+                    issue=issue,
+                    upload_id=target_upload.id,
+                    filename=target_upload.original_filename,
+                )
+            )
+            if issue.level == "block":
+                target_upload.validation_status = ValidationStatus.ERROR.value
+            elif (
+                issue.level == "warn"
+                and target_upload.validation_status == ValidationStatus.OK.value
+            ):
+                target_upload.validation_status = ValidationStatus.WARN.value
+
+    if issue_cap_hit and len(all_issues) >= MAX_ISSUES:
+        all_issues.append(
+            TaggedValidationIssue(
+                kind=UploadKind.PD.value,
+                issue=ValidationIssue(
+                    level="block",
+                    title="Additional errors were found but not shown",
+                    location="Summary",
+                    fix=f"Fix the errors above and re-validate. Up to {MAX_ISSUES} issues are shown per run.",
+                ),
+                upload_id=pd_uploads[0].id if pd_uploads else None,
+                filename=pd_uploads[0].original_filename if pd_uploads else None,
+            )
+        )
+
     detected = sorted(_extract_segments(segment_dfs))
     overall_status = ValidationStatus.OK.value
-    if any(i.level == "block" for _, i in all_issues):
+    if any(tagged.issue.level == "block" for tagged in all_issues):
         overall_status = "blocking"
-    elif any(i.level == "warn" for _, i in all_issues):
+    elif any(tagged.issue.level == "warn" for tagged in all_issues):
         unaccepted = [
-            (k, i)
-            for k, i in all_issues
-            if i.level == "warn" and _issue_id(i) not in accepted_ids
+            tagged
+            for tagged in all_issues
+            if tagged.issue.level == "warn" and _issue_id(tagged.issue) not in accepted_ids
         ]
         if unaccepted and not all(u.warnings_accepted for u in uploads):
             overall_status = ValidationStatus.WARN.value
