@@ -134,11 +134,12 @@ async def delete_upload_endpoint(
 
 
 @router.post("/{tenant_id}/runs/{run_id}/validate")
+@limiter.limit("30/minute")
 async def validate_files_endpoint(
+    request: Request,
     tenant_id: str,
     run_id: str,
     body: ValidateRunRequest,
-    request: Request,
     db: DbSession,
     user: CurrentUser,
     _a: TenantMembership = Depends(require_tenant_analyst_or_admin),
