@@ -42,7 +42,7 @@ def validate_pd(
     else:
         required.append("Reporting Month")
 
-    check_required_columns(df, required, sheet_name=sheet_name, result=result)
+    check_required_columns(df, required, sheet_name=sheet_name, result=result, template_kind="PD")
     if result.remaining_capacity() == 0:
         return result
 
