@@ -14,6 +14,7 @@ import pandas as pd
 from sqlalchemy import and_, delete, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.config import get_settings
 from app.core.enums import UserRole
 from app.core.exceptions import ECLException
 from app.core.pagination import PageMeta
@@ -785,6 +786,14 @@ async def upload_file(
     storage_path = build_storage_path(tenant_id, run_id, kind.lower(), safe_name)
     log.info("upload_streaming_to_storage", run_id=run_id, kind=kind, storage_path=storage_path)
     sha256, size = await upload_stream(storage_path, file_obj, content_type)
+    max_bytes = get_settings().max_upload_bytes
+    if size > max_bytes:
+        await delete_object(storage_path)
+        raise ECLException(
+            "FILE_TOO_LARGE",
+            f"File exceeds the maximum upload size of {max_bytes // (1024 * 1024)} MB.",
+            413,
+        )
     log.info("upload_stored", run_id=run_id, kind=kind, size_bytes=size, sha256_prefix=sha256[:8])
 
     content = await download_bytes(storage_path)
