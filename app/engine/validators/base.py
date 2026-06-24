@@ -20,6 +20,7 @@ class ValidationIssue:
     title: str
     location: str
     fix: str
+    category: str | None = None
 
 
 @dataclass
