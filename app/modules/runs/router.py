@@ -3,7 +3,7 @@ from pathlib import Path
 
 from celery import chord, group
 from fastapi import APIRouter, Depends, File, Form, Query, Request, UploadFile, status
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, Response
 
 from app.core.exceptions import ECLException
 from app.core.limiter import limiter
@@ -292,6 +292,41 @@ async def delete_run_endpoint(
         user.id,
         ip=get_client_ip(request.headers.get("X-Forwarded-For")),
         user_agent=get_user_agent(request.headers.get("User-Agent")),
+    )
+
+
+@router.get("/{tenant_id}/runs/{run_id}/downloads/bundle")
+async def download_workbooks_bundle_endpoint(
+    tenant_id: str,
+    run_id: str,
+    db: DbSession,
+    user: CurrentUser,
+    _m: TenantMembership = Depends(require_tenant_member),
+) -> Response:
+    content, filename = await results_service.build_workbooks_bundle(db, tenant_id, run_id)
+    return Response(
+        content=content,
+        media_type="application/zip",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
+@router.get("/{tenant_id}/runs/{run_id}/downloads/{kind}/file")
+async def download_artifact_file_endpoint(
+    tenant_id: str,
+    run_id: str,
+    kind: str,
+    db: DbSession,
+    user: CurrentUser,
+    _m: TenantMembership = Depends(require_tenant_member),
+) -> Response:
+    content, filename = await results_service.get_artifact_bytes(
+        db, tenant_id, run_id, kind.upper()
+    )
+    return Response(
+        content=content,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
     )
 
 
