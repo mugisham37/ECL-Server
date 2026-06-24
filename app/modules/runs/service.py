@@ -889,6 +889,16 @@ async def validate_files(
     if not uploads:
         raise ECLException("NO_UPLOADS", "No files uploaded for this run.", 400)
 
+    kinds_present = {u.kind for u in uploads}
+    required_kinds = {UploadKind.PD.value, UploadKind.LGD.value, UploadKind.EAD.value}
+    if not required_kinds.issubset(kinds_present):
+        missing = ", ".join(sorted(required_kinds - kinds_present))
+        raise ECLException(
+            "MISSING_UPLOADS",
+            f"Upload PD, LGD, and EAD files before validating. Missing: {missing}.",
+            400,
+        )
+
     log.info("validate_files_loading_uploads", run_id=run_id, upload_count=len(uploads), kinds=[u.kind for u in uploads])
     await log_event(
         db,
