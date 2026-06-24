@@ -45,7 +45,7 @@ def validate_lgd(
     else:
         required.append("Effective Interest Rate (EIR)")
 
-    check_required_columns(df, required, sheet_name=sheet_name, result=result)
+    check_required_columns(df, required, sheet_name=sheet_name, result=result, template_kind="LGD")
     if result.remaining_capacity() == 0:
         return result
 
