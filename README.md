@@ -6,36 +6,59 @@ Production FastAPI authentication backend for the ECL Platform.
 
 ```bash
 cd ECL-Server
-python -m venv .venv && source .venv/bin/activate
-pip install -e ".[dev]"
-cp .env.example .env
-make generate-keys   # paste keys into .env
-make up
-createdb -h localhost -U ecl ecl_test_db  # or via docker
-make migrate
+make setup              # once: create .venv and install dependencies
+cp .env.example .env    # once: configure environment
+make generate-keys      # once: paste keys into .env
 ```
 
-### Development stack (email delivery requires all three)
+### Development (two terminals — separate logs)
 
-Run each command in a **separate terminal**:
+**Terminal 1 — infrastructure + Celery:**
 
 ```bash
-make up                                                          # Terminal 1: Postgres + Redis
-uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload        # Terminal 2: API
-make worker                                                      # Terminal 3: Celery worker (required for emails)
+make dev
+```
+
+**Terminal 2 — API backend only:**
+
+```bash
+make api
+```
+
+Verify the API is healthy:
+
+```bash
+curl -s http://localhost:8000/health | python3 -m json.tool
+```
+
+Stop everything when done:
+
+```bash
+make stop
+```
+
+Do **not** run bare `uvicorn` from your shell — it uses system Python and will fail with `ModuleNotFoundError: No module named 'fastapi'`. Always use `make api`.
+
+### Combined logs (optional)
+
+If you prefer API + Celery in one terminal (mixed logs):
+
+```bash
+make up && make migrate
+make dev-all
 ```
 
 Verify Redis is reachable: `make dev-check`
 
 Email troubleshooting guide: [docs/EMAIL_DIAGNOSIS_PROMPT.md](docs/EMAIL_DIAGNOSIS_PROMPT.md)
 
-Live SMTP smoke test: `pytest tests/test_email_smoke.py -m smtp -v`
+Live SMTP smoke test: `make test` with `pytest tests/test_email_smoke.py -m smtp -v`
 
 ## Tests
 
 ```bash
 docker compose -f docker/docker-compose.test.yml up -d
-pytest tests/ -v
+make test
 ```
 
 ## Frontend contract
