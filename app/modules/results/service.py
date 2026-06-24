@@ -900,6 +900,57 @@ async def _get_output_artifact(
     artifact = result.scalar_one_or_none()
     if not artifact:
         raise ECLException("ARTIFACT_NOT_FOUND", f"No output artifact of kind {kind}.", 404)
+    return artifact
+
+
+async def get_presigned_download(
+    db: AsyncSession,
+    tenant_id: str,
+    run_id: str,
+    kind: str,
+) -> tuple[str, datetime]:
+    from datetime import timedelta
+
+    from app.core.storage import presign_download
+
+    artifact = await _get_output_artifact(db, tenant_id, run_id, kind)
     expires_at = datetime.now(UTC) + timedelta(minutes=15)
     url = await presign_download(artifact.storage_path, expires_seconds=900)
     return url, expires_at
+
+
+async def get_artifact_bytes(
+    db: AsyncSession,
+    tenant_id: str,
+    run_id: str,
+    kind: str,
+) -> tuple[bytes, str]:
+    from app.core.storage import download_bytes
+
+    kind_upper = kind.upper()
+    if kind_upper not in ARTIFACT_FILENAMES:
+        raise ECLException("INVALID_ARTIFACT_KIND", f"Unknown artifact kind {kind}.", 400)
+
+    artifact = await _get_output_artifact(db, tenant_id, run_id, kind_upper)
+    content = await download_bytes(artifact.storage_path)
+    return content, ARTIFACT_FILENAMES[kind_upper]
+
+
+async def build_workbooks_bundle(
+    db: AsyncSession,
+    tenant_id: str,
+    run_id: str,
+) -> tuple[bytes, str]:
+    import io
+    import zipfile
+
+    from app.core.storage import download_bytes
+
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as archive:
+        for kind in WORKBOOK_BUNDLE_KINDS:
+            artifact = await _get_output_artifact(db, tenant_id, run_id, kind)
+            content = await download_bytes(artifact.storage_path)
+            archive.writestr(ARTIFACT_FILENAMES[kind], content)
+
+    return buffer.getvalue(), f"ECL_{run_id}_PD_LGD_EAD_workbooks.zip"
