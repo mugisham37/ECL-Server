@@ -46,8 +46,13 @@ class ValidationResult:
         title: str,
         location: str,
         fix: str,
+        category: str | None = None,
     ) -> None:
-        self.add(ValidationIssue(level="block", title=title, location=location, fix=fix))
+        self.add(
+            ValidationIssue(
+                level="block", title=title, location=location, fix=fix, category=category
+            )
+        )
 
     def add_warn(
         self,
@@ -55,8 +60,17 @@ class ValidationResult:
         title: str,
         location: str,
         fix: str,
+        category: str | None = None,
     ) -> None:
-        self.add(ValidationIssue(level="warn", title=title, location=location, fix=fix))
+        self.add(
+            ValidationIssue(
+                level="warn", title=title, location=location, fix=fix, category=category
+            )
+        )
+
+    @property
+    def issue_cap_reached(self) -> bool:
+        return len(self.issues) >= MAX_ISSUES
 
     def remaining_capacity(self) -> int:
         return max(0, MAX_ISSUES - len(self.issues))
