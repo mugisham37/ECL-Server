@@ -10,7 +10,7 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.exceptions import ECLException
-from app.core.run_enums import RunStatus
+from app.core.run_enums import OutputArtifactKind, RunStatus
 from app.engine.format_utils import (
     format_amount,
     format_compact_amount,
@@ -857,15 +857,26 @@ async def get_loan(
     )
 
 
-async def get_presigned_download(
+ARTIFACT_FILENAMES: dict[str, str] = {
+    OutputArtifactKind.PD_CALCS.value: "PD Calcs.xlsx",
+    OutputArtifactKind.LGD.value: "LGD.xlsx",
+    OutputArtifactKind.RUNDOWN.value: "Contractual Rundown.xlsx",
+    OutputArtifactKind.ECL_SUMMARY.value: "ECL Summary.xlsx",
+}
+
+WORKBOOK_BUNDLE_KINDS: tuple[str, ...] = (
+    OutputArtifactKind.PD_CALCS.value,
+    OutputArtifactKind.LGD.value,
+    OutputArtifactKind.RUNDOWN.value,
+)
+
+
+async def _get_output_artifact(
     db: AsyncSession,
     tenant_id: str,
     run_id: str,
     kind: str,
-) -> tuple[str, datetime]:
-    from datetime import timedelta
-
-    from app.core.storage import presign_download
+):
     from app.modules.results.models import OutputArtifact
     from app.modules.runs.models import Run
 
