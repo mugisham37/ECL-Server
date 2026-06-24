@@ -38,6 +38,9 @@ class ValidationIssueOut(BaseModel):
     title: str
     location: str
     fix: str
+    upload_id: str | None = None
+    filename: str | None = None
+    category: str | None = None
 
 
 class ValidationResultOut(BaseModel):
