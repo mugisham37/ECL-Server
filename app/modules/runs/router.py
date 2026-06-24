@@ -206,9 +206,11 @@ async def execute_run_endpoint(
             )
         except Exception as exc:
             _log.error("compute_chord_dispatch_failed", run_id=run_id, exc_info=exc)
+            await service.revert_run_after_dispatch_failure(db, tenant_id, run_id)
+            await db.commit()
             raise ECLException(
                 "COMPUTE_DISPATCH_FAILED",
-                "Failed to enqueue the compute job. Check that the message broker (Redis) is running.",
+                "Could not start the computation. Please try again in a moment.",
                 503,
             ) from exc
     else:
