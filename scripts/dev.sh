@@ -17,6 +17,11 @@ die()  { echo -e "${RED}[err]${NC}  $*" >&2; exit 1; }
 
 cd "$ROOT"
 
+# ── 0. Cleanup stale Celery processes from previous runs ──────────────────
+log "Stopping stale Celery processes (if any)..."
+bash "$SCRIPT_DIR/stop_dev.sh" --celery-only
+mkdir -p run
+
 # ── 1. Docker ──────────────────────────────────────────────────────────────
 log "Checking Docker daemon..."
 docker info &>/dev/null || die "Docker is not running. Start Docker Desktop (or the daemon) and try again."
@@ -59,8 +64,9 @@ else
   warn "Migration step had issues — database may already be current or there's a connection problem."
 fi
 
-# ── 6. Launch ──────────────────────────────────────────────────────────────
+# ── 6. Launch Celery (API runs separately via `make api`) ───────────────────
 echo ""
-log "All systems go. Starting API + Celery worker..."
+log "All systems go. Starting Celery worker + beat..."
+warn "In another terminal, run: make api"
 echo ""
-exec .venv/bin/honcho start -f Procfile.dev
+exec .venv/bin/celery -A app.tasks.celery_app worker --beat --loglevel=info --concurrency=4 -n dev@%h --schedule=run/celerybeat-schedule
