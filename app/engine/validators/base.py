@@ -91,16 +91,22 @@ def check_required_columns(
     *,
     sheet_name: str,
     result: ValidationResult,
+    template_kind: str | None = None,
 ) -> bool:
     """Return True when all required columns are present."""
     missing = [column for column in required if column not in df.columns]
+    kind_label = template_kind or "upload"
     for column in missing:
         if result.remaining_capacity() == 0:
             return False
         result.add_block(
             title=f"Missing required column: {column}",
             location=f"{sheet_name}, header row",
-            fix=f"Add a column named '{column}' to the upload template.",
+            fix=(
+                f"Download the official {kind_label} template and copy your data into it, "
+                f"or add a column named '{column}'."
+            ),
+            category="template_format",
         )
     return not missing
 
