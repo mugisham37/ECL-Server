@@ -21,6 +21,7 @@ from app.modules.sessions.models import RefreshToken, Session  # noqa: F401
 from app.modules.tenants.models import Tenant, TenantMembership  # noqa: F401
 from app.modules.platform.models import EngineVersion, ImpersonationSession  # noqa: F401
 from app.modules.settings.models import NotificationPreferences  # noqa: F401
+from app.modules.notifications.models import UserNotification  # noqa: F401
 from app.modules.email_outbox.models import EmailOutbox  # noqa: F401
 
 config = context.config
