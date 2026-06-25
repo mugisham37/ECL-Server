@@ -156,6 +156,14 @@ async def accept_invite(
 
     await log_event(db, AuditEvent.INVITE_ACCEPTED, user_id=user.id,
                     ip=ip, details={"tenant_id": inv.tenant_id})
+    from app.modules.notifications.service import notify_member_joined_admins
+
+    await notify_member_joined_admins(
+        db,
+        tenant_id=inv.tenant_id,
+        member_name=user.name,
+        member_email=user.email,
+    )
     queue_email_in_outbox(
         db,
         task_name="send_welcome_to_tenant_email",
