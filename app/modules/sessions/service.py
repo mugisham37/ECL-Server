@@ -74,6 +74,7 @@ async def get_me(db: AsyncSession, user: User, tenant_id: str | None) -> MeData:
                 tenant_name=t.name,
                 role=m.role,
                 status=m.status,
+                currency=t.currency or "USD",
             )
         )
         if t.id == tenant_id or (not tenant_id and m.status == "active"):
