@@ -743,6 +743,25 @@ async def _ead_ecl_main(run_id: str) -> dict[str, str]:
                 coverage_ratio=float(coverage_ratio),
                 pct=100,
             )
+            if run.created_by_user_id:
+                from app.modules.notifications.service import notify_run_completed
+                from app.modules.audit.models import AuditEvent
+                from app.modules.audit.service import log_event
+
+                await notify_run_completed(
+                    db,
+                    user_id=run.created_by_user_id,
+                    tenant_id=run.tenant_id,
+                    run_name=run.name,
+                    run_id=run.id,
+                )
+                await log_event(
+                    db,
+                    AuditEvent.RUN_COMPLETED,
+                    user_id=run.created_by_user_id,
+                    tenant_id=run.tenant_id,
+                    details={"run_id": run.id},
+                )
             return {"run_id": run_id, "stage": "ead_ecl"}
         except Exception as exc:
             _log.error("compute_stage_failed", run_id=run_id, stage=active_stage, exc_info=exc)
