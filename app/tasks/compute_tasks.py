@@ -169,6 +169,28 @@ async def _mark_run_failed(db, run_id: str, stage: str, exc: Exception) -> None:
         failure_ref=failure_ref,
         finished_at=datetime.now(UTC),
     )
+    from app.modules.runs.models import Run
+    from app.modules.notifications.service import notify_run_failed
+    from app.modules.audit.models import AuditEvent
+    from app.modules.audit.service import log_event
+
+    result = await db.execute(select(Run).where(Run.id == run_id))
+    run = result.scalar_one_or_none()
+    if run and run.created_by_user_id:
+        await notify_run_failed(
+            db,
+            user_id=run.created_by_user_id,
+            tenant_id=run.tenant_id,
+            run_name=run.name,
+            run_id=run.id,
+        )
+        await log_event(
+            db,
+            AuditEvent.RUN_FAILED,
+            user_id=run.created_by_user_id,
+            tenant_id=run.tenant_id,
+            details={"run_id": run.id, "stage": stage, "message": str(exc)[:500]},
+        )
 
 
 async def _mark_run_failed_standalone(run_id: str, stage: str, exc: Exception) -> None:
