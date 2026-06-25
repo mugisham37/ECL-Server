@@ -119,6 +119,7 @@ def _user_out(user: User, membership: TenantMembership, tenant: Tenant) -> UserO
         role=membership.role,
         tenant_id=tenant.id,
         tenant_name=tenant.name,
+        currency=tenant.currency or "USD",
         is_email_verified=user.is_email_verified,
         is_onboarding_complete=tenant.onboarding_completed_at is not None,
         is_platform_admin=user.is_platform_admin,
@@ -782,6 +783,7 @@ async def switch_tenant(
         tenant_id=tenant.id,
         tenant_name=tenant.name,
         role=membership.role,
+        currency=tenant.currency or "USD",
         is_onboarding_complete=tenant.onboarding_completed_at is not None,
     )
 
