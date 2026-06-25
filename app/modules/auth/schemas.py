@@ -49,6 +49,7 @@ class UserOut(BaseModel):
     role: str
     tenant_id: str
     tenant_name: str
+    currency: str = "USD"
     is_email_verified: bool
     is_onboarding_complete: bool
     is_platform_admin: bool = False
@@ -77,6 +78,7 @@ class SwitchTenantData(BaseModel):
     tenant_id: str
     tenant_name: str
     role: str
+    currency: str = "USD"
     is_onboarding_complete: bool
 
 
