@@ -22,6 +22,7 @@ class MembershipOut(BaseModel):
     tenant_name: str
     role: str
     status: str
+    currency: str = "USD"
 
 
 class MeData(BaseModel):
