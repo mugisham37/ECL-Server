@@ -295,7 +295,7 @@ def create_app() -> FastAPI:
         except Exception:
             return JSONResponse(status_code=503, content={"status": "not_ready"})
 
-    @app.get("/", include_in_schema=False)
+    @app.api_route("/", methods=["GET", "HEAD"], include_in_schema=False)
     async def root() -> dict[str, str]:
         return {"status": "ok", "version": settings.app_version}
 
