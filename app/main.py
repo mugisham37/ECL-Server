@@ -144,6 +144,7 @@ def create_app() -> FastAPI:
             cookie_samesite="lax",
             header_name="x-csrf-token",
             exempt_urls=[
+                re.compile(r"^/$"),
                 re.compile(r"^/health$"),
                 re.compile(r"^/ready$"),
                 re.compile(r"^/\.well-known/"),
@@ -293,6 +294,10 @@ def create_app() -> FastAPI:
             return {"status": "ready"}
         except Exception:
             return JSONResponse(status_code=503, content={"status": "not_ready"})
+
+    @app.get("/", include_in_schema=False)
+    async def root() -> dict[str, str]:
+        return {"status": "ok", "version": settings.app_version}
 
     @app.get("/.well-known/jwks.json", include_in_schema=False)
     async def jwks() -> JSONResponse:
