@@ -21,5 +21,5 @@ def build_celery_redis_ssl_params(url: str) -> dict:
     dict for plain redis:// so callers can safely ** unpack without branching.
     """
     if urlparse(url).scheme == "rediss":
-        return {"ssl_cert_reqs": ssl.CERT_REQUIRED}
+        return {"ssl_cert_reqs": ssl.CERT_NONE}
     return {}
