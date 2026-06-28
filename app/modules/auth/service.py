@@ -66,7 +66,7 @@ def _set_refresh_cookie(response: Response, raw_token: str, expires: datetime) -
         secure=settings.is_production,
         samesite="lax",
         max_age=max_age,
-        path="/api/v1/auth",
+        path="/",
     )
 
 
@@ -74,7 +74,7 @@ def _clear_refresh_cookie(response: Response) -> None:
     settings = get_settings()
     response.delete_cookie(
         key=settings.refresh_cookie_name,
-        path="/api/v1/auth",
+        path="/",
     )
 
 
