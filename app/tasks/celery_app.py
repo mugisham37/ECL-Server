@@ -13,7 +13,7 @@ from celery.signals import (
 )
 
 from app.config import get_settings
-from app.core.redis_ssl import build_redis_ssl_context
+from app.core.redis_ssl import build_celery_redis_ssl_params
 
 settings = get_settings()
 
@@ -24,7 +24,7 @@ celery_app = Celery(
     include=["app.tasks.email_tasks", "app.tasks.cleanup_tasks", "app.tasks.compute_tasks"],
 )
 
-_redis_ssl_ctx = build_redis_ssl_context(settings.redis_celery_url)
+_celery_ssl_params = build_celery_redis_ssl_params(settings.redis_celery_url)
 
 celery_app.conf.update(
     task_serializer="json",
@@ -84,10 +84,10 @@ celery_app.conf.update(
     },
     **(
         {
-            "broker_use_ssl": {"ssl_context": _redis_ssl_ctx},
-            "redis_backend_use_ssl": {"ssl_context": _redis_ssl_ctx},
+            "broker_use_ssl": _celery_ssl_params,
+            "redis_backend_use_ssl": _celery_ssl_params,
         }
-        if _redis_ssl_ctx is not None
+        if _celery_ssl_params
         else {}
     ),
 )
