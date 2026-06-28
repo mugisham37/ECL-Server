@@ -13,6 +13,7 @@ from celery.signals import (
 )
 
 from app.config import get_settings
+from app.core.redis_ssl import build_redis_ssl_context
 
 settings = get_settings()
 
@@ -22,6 +23,8 @@ celery_app = Celery(
     backend=settings.redis_celery_url,
     include=["app.tasks.email_tasks", "app.tasks.cleanup_tasks", "app.tasks.compute_tasks"],
 )
+
+_redis_ssl_ctx = build_redis_ssl_context(settings.redis_celery_url)
 
 celery_app.conf.update(
     task_serializer="json",
@@ -79,6 +82,14 @@ celery_app.conf.update(
             "time_limit": settings.compute_hard_time_limit,
         },
     },
+    **(
+        {
+            "broker_use_ssl": {"ssl_context": _redis_ssl_ctx},
+            "redis_backend_use_ssl": {"ssl_context": _redis_ssl_ctx},
+        }
+        if _redis_ssl_ctx is not None
+        else {}
+    ),
 )
 
 _task_starts: dict[str, float] = {}

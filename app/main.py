@@ -241,7 +241,12 @@ def create_app() -> FastAPI:
 
         try:
             import redis.asyncio as _aioredis
-            _r = _aioredis.from_url(settings.redis_celery_url)
+            from app.core.redis_ssl import build_redis_ssl_context as _build_ssl
+            _ssl_ctx = _build_ssl(settings.redis_celery_url)
+            _r = _aioredis.from_url(
+                settings.redis_celery_url,
+                **({"ssl_context": _ssl_ctx} if _ssl_ctx is not None else {}),
+            )
             email_queue_depth = int(await _r.llen("celery") or 0)
             await _r.aclose()
         except Exception:
