@@ -2,6 +2,7 @@
 set -e
 
 echo "Starting Celery worker + beat..."
+mkdir -p run
 .venv/bin/celery \
   -A app.tasks.celery_app worker \
   --beat \
