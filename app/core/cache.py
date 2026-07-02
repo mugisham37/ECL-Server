@@ -5,7 +5,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import get_settings
-from app.core.redis_ssl import build_redis_ssl_context
+from app.core.redis_ssl import build_redis_connection_kwargs
 
 _redis: Redis | None = None
 
@@ -14,11 +14,10 @@ async def get_redis_client() -> Redis:
     global _redis
     if _redis is None:
         settings = get_settings()
-        _ssl_ctx = build_redis_ssl_context(settings.redis_url)
         _redis = Redis.from_url(
             settings.redis_url,
             decode_responses=True,
-            **({"ssl_context": _ssl_ctx} if _ssl_ctx is not None else {}),
+            **build_redis_connection_kwargs(settings.redis_url),
         )
     return _redis
 

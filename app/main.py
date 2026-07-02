@@ -55,7 +55,9 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
         storage_status = f"error: {exc}"
 
     smtp_status: str = "ok"
-    if settings.smtp_username:
+    # Skip SMTP connectivity check in production — Render blocks outbound port 587.
+    # Email sending is suppressed via SUPPRESS_EMAIL_SEND env var in production.
+    if settings.smtp_username and not settings.is_production:
         import asyncio
         import smtplib
 
@@ -233,7 +235,7 @@ def create_app() -> FastAPI:
         try:
             from app.tasks.celery_app import celery_app as _celery
             pong = await asyncio.get_event_loop().run_in_executor(
-                None, lambda: _celery.control.inspect(timeout=2).ping()
+                None, lambda: _celery.control.inspect(timeout=5).ping()
             )
             celery_worker = "ok" if pong else "no_workers"
         except Exception as exc:
@@ -241,11 +243,10 @@ def create_app() -> FastAPI:
 
         try:
             import redis.asyncio as _aioredis
-            from app.core.redis_ssl import build_redis_ssl_context as _build_ssl
-            _ssl_ctx = _build_ssl(settings.redis_celery_url)
+            from app.core.redis_ssl import build_redis_connection_kwargs as _build_kwargs
             _r = _aioredis.from_url(
                 settings.redis_celery_url,
-                **({"ssl_context": _ssl_ctx} if _ssl_ctx is not None else {}),
+                **_build_kwargs(settings.redis_celery_url),
             )
             email_queue_depth = int(await _r.llen("celery") or 0)
             await _r.aclose()

@@ -1,0 +1,2 @@
+api:    .venv/bin/uvicorn app.main:app --host 0.0.0.0 --port ${PORT:-8000} --no-access-log
+worker: .venv/bin/celery -A app.tasks.celery_app worker --beat --loglevel=info --concurrency=1 --pool=solo -n worker@%h --schedule=run/celerybeat-schedule

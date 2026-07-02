@@ -40,6 +40,7 @@ dependencies = [
     "openpyxl>=3.1",
     "xlsxwriter>=3.2",
     "aiobotocore>=2.13",
+    "honcho>=1.1",
 ]
 
 [project.optional-dependencies]
@@ -55,7 +56,6 @@ dev = [
     "bandit>=1.7",
     "pip-audit>=2.7",
     "types-aiobotocore-s3>=2.13",
-    "honcho>=1.1",
 ]
 
 [build-system]

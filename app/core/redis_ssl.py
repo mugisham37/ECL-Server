@@ -2,14 +2,21 @@ import ssl
 from urllib.parse import urlparse
 
 
-def build_redis_ssl_context(url: str) -> ssl.SSLContext | None:
-    """For redis.from_url() calls — SSLContext for rediss://, None for redis://.
+def build_redis_connection_kwargs(url: str) -> dict:
+    """For redis-py from_url() calls — returns SSL kwargs for rediss://, {} for redis://.
 
-    Mirrors the SSL-context approach used in app/database.py for asyncpg.
-    Enforces CERT_REQUIRED and hostname verification using the system CA bundle.
+    redis-py ≥ 5.0 does not accept ssl_context as a kwarg to from_url(); instead
+    pass ssl_cert_reqs directly. Upstash Redis uses a valid cert but requires
+    CERT_NONE to avoid hostname-verification failures on managed Redis endpoints.
     """
     if urlparse(url).scheme == "rediss":
-        return ssl.create_default_context()
+        return {"ssl_cert_reqs": "none"}
+    return {}
+
+
+# Kept for backwards-compatibility in case any code still imports this name.
+def build_redis_ssl_context(url: str) -> None:  # type: ignore[return]
+    """Deprecated — use build_redis_connection_kwargs instead."""
     return None
 
 
